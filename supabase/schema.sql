@@ -150,6 +150,34 @@ begin
 end;
 $$;
 
+create or replace function public.save_tiebreaker(
+  target_week_id uuid, next_total_points integer
+) returns void language plpgsql security definer set search_path = public as $$
+declare current_lock timestamptz;
+begin
+  if not public.is_approved_user() then raise exception 'Not approved.'; end if;
+  select lock_at into current_lock from public.pick_weeks where id = target_week_id;
+  if current_lock is null then raise exception 'Unknown pick week.'; end if;
+  if now() >= current_lock then raise exception 'Picks are locked.'; end if;
+  if next_total_points < 0 or next_total_points > 200 then raise exception 'Invalid total.'; end if;
+  insert into public.week_tiebreakers (week_id, user_id, predicted_total_points)
+  values (target_week_id, auth.uid(), next_total_points)
+  on conflict (week_id, user_id) do update set
+    predicted_total_points = excluded.predicted_total_points,
+    updated_at = now();
+end;
+$$;
+
+create or replace function public.get_my_app_approval_status()
+returns jsonb language sql security definer set search_path = public as $$
+  select jsonb_build_object(
+    'user_id', auth.uid(),
+    'status', case when public.is_app_owner() then 'approved'
+      else coalesce((select status from public.app_user_approvals where user_id = auth.uid()), 'pending') end,
+    'is_owner', public.is_app_owner()
+  );
+$$;
+
 alter table public.profiles enable row level security;
 alter table public.app_user_approvals enable row level security;
 alter table public.pick_weeks enable row level security;
@@ -173,4 +201,6 @@ create policy "owner manages week games" on public.week_games for all using (pub
 create policy "owner manages approvals" on public.app_user_approvals for all using (public.is_app_owner()) with check (public.is_app_owner());
 
 grant execute on function public.save_pick(uuid, uuid, text) to authenticated;
+grant execute on function public.save_tiebreaker(uuid, integer) to authenticated;
+grant execute on function public.get_my_app_approval_status() to authenticated;
 commit;

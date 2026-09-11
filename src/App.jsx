@@ -2,12 +2,21 @@ import { useEffect, useMemo, useState } from "react";
 import { Check, ChevronDown, CircleAlert, ClipboardCheck, LockKeyhole, Settings, Trophy } from "lucide-react";
 import { demoGames, demoWeek } from "./data/demoSlate";
 import { loadEspnFbsGames } from "./data/providers/espn";
+import { getApprovalStatus, getSession, onAuthChange, signIn, signUp } from "./lib/auth";
+import { loadPublishedWeek, publishWeek, savePick, saveTiebreaker } from "./lib/footballData";
+import { isSupabaseConfigured } from "./lib/supabase";
 
 const LOCAL_PICKS_KEY = "saturday-slate-demo-picks-v1";
 const LOCAL_SLATE_KEY = "saturday-slate-local-slate-v1";
 const WOLVERINE_HELMET = `${import.meta.env.BASE_URL}icons/icon-512.png`;
 const LIONS_HELMET = `${import.meta.env.BASE_URL}helmets/lions-helmet-silver.png`;
 const loadLocal = (key, fallback) => { try { return JSON.parse(localStorage.getItem(key)) || fallback; } catch { return fallback; } };
+
+function SignInScreen() {
+  const [mode, setMode] = useState("sign-in"); const [email, setEmail] = useState(""); const [password, setPassword] = useState(""); const [displayName, setDisplayName] = useState(""); const [message, setMessage] = useState(""); const [working, setWorking] = useState(false);
+  async function submit(event) { event.preventDefault(); setWorking(true); setMessage(""); try { if (mode === "sign-in") await signIn(email, password); else { await signUp(email, password, displayName); setMessage("Account created. Check your email if confirmation is required, then wait for approval."); } } catch (error) { setMessage(error.message); } finally { setWorking(false); } }
+  return <main className="app-shell auth-shell"><div className="brand"><span aria-hidden="true" className="helmet-morph"><img className="helmet-wolverine" src={WOLVERINE_HELMET} /><img className="helmet-lions" src={LIONS_HELMET} /></span><span>Saturday Slate</span></div><section className="auth-card"><p className="eyebrow">PRIVATE PICKS GROUP</p><h1>{mode === "sign-in" ? "Welcome back" : "Request access"}</h1><p>Sign in to make picks and follow the weekly slate.</p><form onSubmit={submit}>{mode === "sign-up" && <label>Display name<input required value={displayName} onChange={(event) => setDisplayName(event.target.value)} /></label>}<label>Email<input autoComplete="email" required type="email" value={email} onChange={(event) => setEmail(event.target.value)} /></label><label>Password<input autoComplete={mode === "sign-in" ? "current-password" : "new-password"} minLength="8" required type="password" value={password} onChange={(event) => setPassword(event.target.value)} /></label>{message && <p className="notice"><CircleAlert size={18} />{message}</p>}<button className="save-button" disabled={working} type="submit">{working ? "Please wait…" : mode === "sign-in" ? "Sign in" : "Create account"}</button></form><button className="auth-switch" onClick={() => setMode(mode === "sign-in" ? "sign-up" : "sign-in")} type="button">{mode === "sign-in" ? "Need an account? Request access" : "Already approved? Sign in"}</button></section></main>;
+}
 
 function GameCard({ game, selection, onPick }) {
   const choices = [{ team: game.away, spread: game.awaySpread, side: "away" }, { team: game.home, spread: game.homeSpread, side: "home" }];
@@ -47,12 +56,16 @@ function AdminPage({ onPublish }) {
   </>;
 }
 
-function PicksPage({ games, picks, setPicks, totalPoints, setTotalPoints, notice, setNotice }) {
+function PicksPage({ games, picks, setPicks, totalPoints, setTotalPoints, notice, setNotice, cloudWeekId }) {
   const pickedCount = Object.keys(picks).filter((id) => games.some((game) => game.id === id)).length;
   const missing = games.length - pickedCount;
   const formattedLock = useMemo(() => new Intl.DateTimeFormat("en-US", { weekday: "long", hour: "numeric", minute: "2-digit", timeZoneName: "short" }).format(new Date(demoWeek.lockAt)), []);
   const pickGame = (gameId, side) => { setPicks((current) => ({ ...current, [gameId]: side })); setNotice(""); };
-  const savePicks = () => setNotice(missing ? `${missing} ${missing === 1 ? "game is" : "games are"} still blank. You can change picks until the lock, but blank picks receive zero points.` : "All picks are saved on this device. You can refresh the page to verify they remain here.");
+  const savePicks = async () => {
+    if (missing) { setNotice(`${missing} ${missing === 1 ? "game is" : "games are"} still blank. You can change picks until the lock, but blank picks receive zero points.`); return; }
+    if (cloudWeekId) { try { await Promise.all(Object.entries(picks).map(([gameId, side]) => savePick(cloudWeekId, gameId, side))); await saveTiebreaker(cloudWeekId, totalPoints); setNotice("Your picks are securely saved."); } catch (error) { setNotice(`Could not save your picks: ${error.message}`); } return; }
+    setNotice("All picks are saved on this device. You can refresh the page to verify they remain here.");
+  };
   return <>
     <section className="week-header"><div><p className="eyebrow">{demoWeek.season} FOOTBALL PICKS</p><h1>{demoWeek.label}</h1></div><div className="score-chip"><Trophy size={17} /><span>Standings</span></div></section>
     <section className="lock-banner" aria-label="Pick deadline"><LockKeyhole size={20} /><div><strong>Picks lock {formattedLock}</strong><span>One hour before the first included NCAA game</span></div></section>
@@ -71,7 +84,30 @@ export default function App() {
   const [totalPoints, setTotalPoints] = useState(localPicks.totalPoints);
   const [games, setGames] = useState(localSlate.games);
   const [notice, setNotice] = useState("");
+  const [session, setSession] = useState(null);
+  const [approval, setApproval] = useState(null);
+  const [cloudWeekId, setCloudWeekId] = useState(null);
+  const [authReady, setAuthReady] = useState(!isSupabaseConfigured);
   useEffect(() => { localStorage.setItem(LOCAL_PICKS_KEY, JSON.stringify({ picks, totalPoints })); }, [picks, totalPoints]);
-  function publishGames(nextGames) { setGames(nextGames); setPicks({}); setNotice("Your new slate is ready for local pick testing."); setPage("picks"); }
-  return <main className="app-shell"><header className="topbar"><div className="brand"><span aria-hidden="true" className="helmet-morph"><img className="helmet-wolverine" src={WOLVERINE_HELMET} /><img className="helmet-lions" src={LIONS_HELMET} /></span><span>Saturday Slate</span></div><button className="profile-button" type="button" aria-label="Open account menu">IG <ChevronDown size={15} /></button></header><nav className="page-nav" aria-label="Main navigation"><button className={page === "picks" ? "active" : ""} onClick={() => setPage("picks")} type="button">Picks</button><button className={page === "admin" ? "active" : ""} onClick={() => setPage("admin")} type="button">Admin</button></nav>{page === "admin" ? <AdminPage onPublish={publishGames} /> : <PicksPage games={games} picks={picks} setPicks={setPicks} totalPoints={totalPoints} setTotalPoints={setTotalPoints} notice={notice} setNotice={setNotice} />}</main>;
+  useEffect(() => {
+    if (!isSupabaseConfigured) return undefined;
+    const update = async (nextSession) => { setSession(nextSession); setApproval(nextSession ? await getApprovalStatus() : null); setAuthReady(true); };
+    getSession().then(update).catch(() => setAuthReady(true));
+    return onAuthChange(update);
+  }, []);
+  useEffect(() => {
+    if (!isSupabaseConfigured || approval?.status !== "approved") return;
+    loadPublishedWeek().then((week) => { if (week) { setCloudWeekId(week.id); setGames(week.games); } }).catch((error) => setNotice(`Could not load the shared slate: ${error.message}`));
+  }, [approval]);
+  async function publishGames(nextGames) {
+    if (isSupabaseConfigured) {
+      try { const weekId = await publishWeek({ season: demoWeek.season, weekNumber: 2, title: demoWeek.label, lockAt: demoWeek.lockAt, games: nextGames, tiebreakerGameId: null }); setCloudWeekId(weekId); setNotice("The slate is published for approved users."); }
+      catch (error) { setNotice(`Could not publish the slate: ${error.message}`); return; }
+    } else { localStorage.setItem(LOCAL_SLATE_KEY, JSON.stringify({ games: nextGames, selectedIds: nextGames.map((game) => game.id) })); setNotice("Your new slate is ready for local pick testing."); }
+    setGames(nextGames); setPicks({}); setPage("picks");
+  }
+  if (!authReady) return <main className="app-shell"><p className="demo-note">Checking your account…</p></main>;
+  if (isSupabaseConfigured && !session) return <SignInScreen />;
+  if (isSupabaseConfigured && approval?.status !== "approved") return <main className="app-shell auth-shell"><section className="auth-card"><p className="eyebrow">ACCESS PENDING</p><h1>Your account is waiting for approval.</h1><p>You’ll be able to make picks after the group administrator approves your request.</p></section></main>;
+  return <main className="app-shell"><header className="topbar"><div className="brand"><span aria-hidden="true" className="helmet-morph"><img className="helmet-wolverine" src={WOLVERINE_HELMET} /><img className="helmet-lions" src={LIONS_HELMET} /></span><span>Saturday Slate</span></div><button className="profile-button" type="button" aria-label="Open account menu">IG <ChevronDown size={15} /></button></header><nav className="page-nav" aria-label="Main navigation"><button className={page === "picks" ? "active" : ""} onClick={() => setPage("picks")} type="button">Picks</button>{(!isSupabaseConfigured || approval?.is_owner) && <button className={page === "admin" ? "active" : ""} onClick={() => setPage("admin")} type="button">Admin</button>}</nav>{page === "admin" ? <AdminPage onPublish={publishGames} /> : <PicksPage games={games} picks={picks} setPicks={setPicks} totalPoints={totalPoints} setTotalPoints={setTotalPoints} notice={notice} setNotice={setNotice} cloudWeekId={cloudWeekId} />}</main>;
 }

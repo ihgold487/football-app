@@ -32,6 +32,7 @@ export async function loadEspnFbsGames(date) {
     return [{
       id: `espn-${event.id}`,
       league: "NCAA",
+      kickoffAt: event.date,
       kickoff: new Intl.DateTimeFormat("en-US", { weekday: "short", hour: "numeric", minute: "2-digit" }).format(new Date(event.date)),
       away: away.team.displayName,
       home: home.team.displayName,
