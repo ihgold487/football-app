@@ -6,7 +6,7 @@ import { loadEspnFbsGames } from "./data/providers/espn";
 const LOCAL_PICKS_KEY = "saturday-slate-demo-picks-v1";
 const LOCAL_SLATE_KEY = "saturday-slate-local-slate-v1";
 const WOLVERINE_HELMET = `${import.meta.env.BASE_URL}icons/icon-512.png`;
-const LIONS_HELMET = `${import.meta.env.BASE_URL}helmets/lions-helmet.png`;
+const LIONS_HELMET = `${import.meta.env.BASE_URL}helmets/lions-helmet-silver.png`;
 const loadLocal = (key, fallback) => { try { return JSON.parse(localStorage.getItem(key)) || fallback; } catch { return fallback; } };
 
 function GameCard({ game, selection, onPick }) {
