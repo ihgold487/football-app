@@ -1,6 +1,16 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Check, ChevronDown, CircleAlert, LockKeyhole, Trophy } from "lucide-react";
 import { demoGames, demoWeek } from "./data/demoSlate";
+
+const LOCAL_PICKS_KEY = "saturday-slate-demo-picks-v1";
+
+function loadLocalPicks() {
+  try {
+    return JSON.parse(localStorage.getItem(LOCAL_PICKS_KEY)) || { picks: {}, totalPoints: 47 };
+  } catch {
+    return { picks: {}, totalPoints: 47 };
+  }
+}
 
 function GameCard({ game, selection, onPick }) {
   const choices = [
@@ -37,8 +47,9 @@ function GameCard({ game, selection, onPick }) {
 }
 
 export default function App() {
-  const [picks, setPicks] = useState({});
-  const [totalPoints, setTotalPoints] = useState(47);
+  const [localPicks] = useState(loadLocalPicks);
+  const [picks, setPicks] = useState(localPicks.picks);
+  const [totalPoints, setTotalPoints] = useState(localPicks.totalPoints);
   const [notice, setNotice] = useState("");
   const pickedCount = Object.keys(picks).length;
   const missing = demoGames.length - pickedCount;
@@ -46,6 +57,10 @@ export default function App() {
     () => new Intl.DateTimeFormat("en-US", { weekday: "long", hour: "numeric", minute: "2-digit", timeZoneName: "short" }).format(new Date(demoWeek.lockAt)),
     []
   );
+
+  useEffect(() => {
+    localStorage.setItem(LOCAL_PICKS_KEY, JSON.stringify({ picks, totalPoints }));
+  }, [picks, totalPoints]);
 
   function pickGame(gameId, side) {
     setPicks((current) => ({ ...current, [gameId]: side }));
@@ -57,7 +72,7 @@ export default function App() {
       setNotice(`${missing} ${missing === 1 ? "game is" : "games are"} still blank. You can change picks until the lock, but blank picks receive zero points.`);
       return;
     }
-    setNotice("All picks are ready. Supabase saving will be connected in the next increment.");
+    setNotice("All picks are saved on this device. You can refresh the page to verify they remain here.");
   }
 
   return (
@@ -85,7 +100,7 @@ export default function App() {
         <span className="pick-count">{pickedCount} / {demoGames.length}</span>
       </section>
 
-      <section className="games" aria-label="Week 1 games">
+      <section className="games" aria-label="Week 2 games">
         {demoGames.map((game) => <GameCard game={game} key={game.id} selection={picks[game.id]} onPick={pickGame} />)}
       </section>
 
@@ -96,7 +111,7 @@ export default function App() {
 
       {notice && <p className="notice"><CircleAlert size={18} />{notice}</p>}
       <button className="save-button" onClick={savePicks} type="button">Save {pickedCount ? "my picks" : "picks"}</button>
-      <p className="demo-note">Development preview · sample games only</p>
+      <p className="demo-note">Development preview · picks are saved only on this device</p>
     </main>
   );
 }

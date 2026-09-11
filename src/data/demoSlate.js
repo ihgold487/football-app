@@ -1,7 +1,7 @@
 export const demoWeek = {
-  label: "Week 1",
+  label: "Week 2",
   season: 2026,
-  lockAt: "2026-09-05T15:00:00-04:00",
+  lockAt: "2026-09-12T11:00:00-04:00",
   tieBreaker: "Sunday Night Football",
 };
 
