@@ -5,6 +5,8 @@ import { loadEspnFbsGames } from "./data/providers/espn";
 
 const LOCAL_PICKS_KEY = "saturday-slate-demo-picks-v1";
 const LOCAL_SLATE_KEY = "saturday-slate-local-slate-v1";
+const WOLVERINE_HELMET = `${import.meta.env.BASE_URL}icons/icon-512.png`;
+const LIONS_HELMET = `${import.meta.env.BASE_URL}helmets/lions-helmet.png`;
 const loadLocal = (key, fallback) => { try { return JSON.parse(localStorage.getItem(key)) || fallback; } catch { return fallback; } };
 
 function GameCard({ game, selection, onPick }) {
@@ -71,5 +73,5 @@ export default function App() {
   const [notice, setNotice] = useState("");
   useEffect(() => { localStorage.setItem(LOCAL_PICKS_KEY, JSON.stringify({ picks, totalPoints })); }, [picks, totalPoints]);
   function publishGames(nextGames) { setGames(nextGames); setPicks({}); setNotice("Your new slate is ready for local pick testing."); setPage("picks"); }
-  return <main className="app-shell"><header className="topbar"><div className="brand"><span className="brand-mark">S</span><span>Saturday Slate</span></div><button className="profile-button" type="button" aria-label="Open account menu">IG <ChevronDown size={15} /></button></header><nav className="page-nav" aria-label="Main navigation"><button className={page === "picks" ? "active" : ""} onClick={() => setPage("picks")} type="button">Picks</button><button className={page === "admin" ? "active" : ""} onClick={() => setPage("admin")} type="button">Admin</button></nav>{page === "admin" ? <AdminPage onPublish={publishGames} /> : <PicksPage games={games} picks={picks} setPicks={setPicks} totalPoints={totalPoints} setTotalPoints={setTotalPoints} notice={notice} setNotice={setNotice} />}</main>;
+  return <main className="app-shell"><header className="topbar"><div className="brand"><span aria-hidden="true" className="helmet-morph"><img className="helmet-wolverine" src={WOLVERINE_HELMET} /><img className="helmet-lions" src={LIONS_HELMET} /></span><span>Saturday Slate</span></div><button className="profile-button" type="button" aria-label="Open account menu">IG <ChevronDown size={15} /></button></header><nav className="page-nav" aria-label="Main navigation"><button className={page === "picks" ? "active" : ""} onClick={() => setPage("picks")} type="button">Picks</button><button className={page === "admin" ? "active" : ""} onClick={() => setPage("admin")} type="button">Admin</button></nav>{page === "admin" ? <AdminPage onPublish={publishGames} /> : <PicksPage games={games} picks={picks} setPicks={setPicks} totalPoints={totalPoints} setTotalPoints={setTotalPoints} notice={notice} setNotice={setNotice} />}</main>;
 }
