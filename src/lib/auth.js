@@ -22,7 +22,13 @@ export async function signUp(email, password, displayName) {
   const { error } = await supabase.auth.signUp({
     email,
     password,
-    options: { data: { display_name: displayName } },
+    options: {
+      data: { display_name: displayName },
+      // GitHub Pages hosts this app beneath /football-app/. Supplying the
+      // precise current app URL prevents confirmation links from falling
+      // back to a GitHub account root, which has no site to serve.
+      emailRedirectTo: new URL(import.meta.env.BASE_URL, window.location.origin).toString(),
+    },
   });
   if (error) throw error;
 }

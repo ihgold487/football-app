@@ -3,7 +3,7 @@ import { Check, ChevronDown, CircleAlert, ClipboardCheck, LockKeyhole, Settings,
 import { demoGames, demoWeek } from "./data/demoSlate";
 import { loadEspnFbsGames } from "./data/providers/espn";
 import { getApprovalStatus, getSession, onAuthChange, signIn, signUp } from "./lib/auth";
-import { loadPublishedWeek, publishWeek, savePick, saveTiebreaker } from "./lib/footballData";
+import { loadPublishedWeek, loadUserApprovals, publishWeek, savePick, saveTiebreaker, updateUserApproval } from "./lib/footballData";
 import { isSupabaseConfigured } from "./lib/supabase";
 
 const LOCAL_PICKS_KEY = "saturday-slate-demo-picks-v1";
@@ -26,7 +26,30 @@ function GameCard({ game, selection, onPick }) {
   })}</div></article>;
 }
 
-function AdminPage({ onPublish }) {
+function UserApprovals({ ownerId }) {
+  const [users, setUsers] = useState([]);
+  const [loading, setLoading] = useState(isSupabaseConfigured);
+  const [changingUserId, setChangingUserId] = useState(null);
+  const [message, setMessage] = useState("");
+  const refreshUsers = async () => {
+    if (!isSupabaseConfigured) return;
+    setLoading(true);
+    try { setUsers(await loadUserApprovals()); }
+    catch (error) { setMessage(`Could not load users: ${error.message}`); }
+    finally { setLoading(false); }
+  };
+  useEffect(() => { refreshUsers(); }, []);
+  async function changeStatus(userId, status) {
+    setChangingUserId(userId); setMessage("");
+    try { await updateUserApproval(userId, status, ownerId); setUsers((current) => current.map((user) => user.user_id === userId ? { ...user, status } : user)); }
+    catch (error) { setMessage(`Could not update access: ${error.message}`); }
+    finally { setChangingUserId(null); }
+  }
+  if (!isSupabaseConfigured) return <section className="approval-panel"><div><p className="eyebrow">USER MANAGEMENT</p><h2>User approvals</h2><p>Connect Supabase to manage access for your group.</p></div></section>;
+  return <section className="approval-panel"><div className="approval-heading"><div><p className="eyebrow">USER MANAGEMENT</p><h2>User approvals</h2><p>Approve friends after they confirm their email address.</p></div><button className="refresh-button" disabled={loading} onClick={refreshUsers} type="button">{loading ? "Loading…" : "Refresh"}</button></div>{message && <p className="notice"><CircleAlert size={18} />{message}</p>}{!loading && !users.length && <p className="empty-state">No accounts have requested access yet.</p>}<div className="approval-list">{users.map((user) => { const isOwner = user.user_id === ownerId; const isChanging = changingUserId === user.user_id; return <article className="approval-user" key={user.user_id}><div><strong>{user.display_name}</strong><span>{user.email}</span><small>{isOwner ? "App owner" : `Current status: ${user.status}`}</small></div>{isOwner ? <span className="owner-badge">Owner</span> : <div className="approval-actions"><button className={user.status === "approved" ? "selected" : ""} disabled={isChanging} onClick={() => changeStatus(user.user_id, "approved")} type="button">Approve</button><button className={user.status === "pending" ? "selected" : ""} disabled={isChanging} onClick={() => changeStatus(user.user_id, "pending")} type="button">Pending</button><button className={user.status === "denied" ? "selected deny" : "deny"} disabled={isChanging} onClick={() => changeStatus(user.user_id, "denied")} type="button">Deny</button></div>}</article>; })}</div></section>;
+}
+
+function AdminPage({ onPublish, ownerId }) {
   const saved = loadLocal(LOCAL_SLATE_KEY, { games: demoGames, selectedIds: demoGames.map((game) => game.id) });
   const [availableGames, setAvailableGames] = useState(saved.games);
   const [selectedIds, setSelectedIds] = useState(saved.selectedIds);
@@ -53,6 +76,7 @@ function AdminPage({ onPublish }) {
     <section className="admin-games" aria-label="Available FBS games">{availableGames.map((game) => <label className="admin-game" key={game.id}><input checked={selectedIds.includes(game.id)} onChange={() => toggleGame(game.id)} type="checkbox" /><span><strong>{game.away} <em>{game.awaySpread}</em> at {game.home} <em>{game.homeSpread}</em></strong><small>{game.kickoff} · {game.spreadDetail || "Spread unavailable"}</small></span></label>)}</section>
     {message && <p className="notice"><CircleAlert size={18} />{message}</p>}
     <button className="save-button" onClick={publishSlate} type="button"><ClipboardCheck size={18} />Publish {selectedIds.length || ""} games to Picks</button><p className="demo-note">Development preview · the published slate is saved only on this device</p>
+    <UserApprovals ownerId={ownerId} />
   </>;
 }
 
@@ -109,5 +133,5 @@ export default function App() {
   if (!authReady) return <main className="app-shell"><p className="demo-note">Checking your account…</p></main>;
   if (isSupabaseConfigured && !session) return <SignInScreen />;
   if (isSupabaseConfigured && approval?.status !== "approved") return <main className="app-shell auth-shell"><section className="auth-card"><p className="eyebrow">ACCESS PENDING</p><h1>Your account is waiting for approval.</h1><p>You’ll be able to make picks after the group administrator approves your request.</p></section></main>;
-  return <main className="app-shell"><header className="topbar"><div className="brand"><span aria-hidden="true" className="helmet-morph"><img className="helmet-wolverine" src={WOLVERINE_HELMET} /><img className="helmet-lions" src={LIONS_HELMET} /></span><span>Saturday Slate</span></div><button className="profile-button" type="button" aria-label="Open account menu">IG <ChevronDown size={15} /></button></header><nav className="page-nav" aria-label="Main navigation"><button className={page === "picks" ? "active" : ""} onClick={() => setPage("picks")} type="button">Picks</button>{(!isSupabaseConfigured || approval?.is_owner) && <button className={page === "admin" ? "active" : ""} onClick={() => setPage("admin")} type="button">Admin</button>}</nav>{page === "admin" ? <AdminPage onPublish={publishGames} /> : <PicksPage games={games} picks={picks} setPicks={setPicks} totalPoints={totalPoints} setTotalPoints={setTotalPoints} notice={notice} setNotice={setNotice} cloudWeekId={cloudWeekId} />}</main>;
+  return <main className="app-shell"><header className="topbar"><div className="brand"><span aria-hidden="true" className="helmet-morph"><img className="helmet-wolverine" src={WOLVERINE_HELMET} /><img className="helmet-lions" src={LIONS_HELMET} /></span><span>Saturday Slate</span></div><button className="profile-button" type="button" aria-label="Open account menu">IG <ChevronDown size={15} /></button></header><nav className="page-nav" aria-label="Main navigation"><button className={page === "picks" ? "active" : ""} onClick={() => setPage("picks")} type="button">Picks</button>{(!isSupabaseConfigured || approval?.is_owner) && <button className={page === "admin" ? "active" : ""} onClick={() => setPage("admin")} type="button">Admin</button>}</nav>{page === "admin" ? <AdminPage onPublish={publishGames} ownerId={session?.user?.id} /> : <PicksPage games={games} picks={picks} setPicks={setPicks} totalPoints={totalPoints} setTotalPoints={setTotalPoints} notice={notice} setNotice={setNotice} cloudWeekId={cloudWeekId} />}</main>;
 }

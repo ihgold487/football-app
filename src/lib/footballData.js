@@ -42,6 +42,35 @@ export async function saveTiebreaker(weekId, totalPoints) {
   if (error) throw error;
 }
 
+export async function loadUserApprovals() {
+  const { data: approvals, error: approvalError } = await supabase
+    .from("app_user_approvals")
+    .select("user_id, email, status, created_at, approved_at")
+    .order("created_at", { ascending: true });
+  if (approvalError) throw approvalError;
+
+  const { data: profiles, error: profileError } = await supabase
+    .from("profiles")
+    .select("user_id, display_name");
+  if (profileError) throw profileError;
+
+  const names = new Map((profiles ?? []).map((profile) => [profile.user_id, profile.display_name]));
+  return (approvals ?? []).map((approval) => ({ ...approval, display_name: names.get(approval.user_id) ?? approval.email }));
+}
+
+export async function updateUserApproval(userId, status, approvedBy) {
+  const { error } = await supabase
+    .from("app_user_approvals")
+    .update({
+      status,
+      approved_at: status === "approved" ? new Date().toISOString() : null,
+      approved_by: status === "approved" ? approvedBy : null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("user_id", userId);
+  if (error) throw error;
+}
+
 export async function publishWeek({ season, weekNumber, title, lockAt, games, tiebreakerGameId }) {
   const { data: week, error: weekError } = await supabase.from("pick_weeks").upsert({
     season, week_number: weekNumber, title, lock_at: lockAt, tiebreaker_game_id: tiebreakerGameId, published_at: new Date().toISOString(),
