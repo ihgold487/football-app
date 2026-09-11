@@ -28,7 +28,7 @@ export async function loadPublishedWeek() {
       id: games.id, league: games.league === "nfl" ? "NFL" : "NCAA", kickoff: new Intl.DateTimeFormat("en-US", { weekday: "short", hour: "numeric", minute: "2-digit" }).format(new Date(games.kickoff_at)),
       away: games.away_team, home: games.home_team, awaySpread: games.home_spread === null ? "—" : (games.home_spread > 0 ? `−${games.home_spread}` : `+${Math.abs(games.home_spread)}`),
       homeSpread: games.home_spread === null ? "—" : (games.home_spread > 0 ? `+${games.home_spread}` : `−${Math.abs(games.home_spread)}`), status: games.status,
-    })),
+    })).sort((left, right) => (left.league === right.league ? 0 : left.league === "NCAA" ? -1 : 1)),
   };
 }
 
@@ -71,17 +71,20 @@ export async function updateUserApproval(userId, status, approvedBy) {
   if (error) throw error;
 }
 
-export async function publishWeek({ season, weekNumber, title, lockAt, games, tiebreakerGameId }) {
+export async function publishWeek({ season, weekNumber, title, lockAt, lockRule, games, tiebreakerGameId }) {
   const { data: week, error: weekError } = await supabase.from("pick_weeks").upsert({
-    season, week_number: weekNumber, title, lock_at: lockAt, tiebreaker_game_id: tiebreakerGameId, published_at: new Date().toISOString(),
+    season, week_number: weekNumber, title, lock_at: lockAt, lock_rule: lockRule, tiebreaker_game_id: null, published_at: new Date().toISOString(),
   }, { onConflict: "season,week_number" }).select("id").single();
   if (weekError) throw weekError;
   const gameRows = games.map((game) => ({ provider: "espn", provider_game_id: game.id, league: game.league === "NFL" ? "nfl" : "ncaa_fbs", season, week_number: weekNumber, kickoff_at: game.kickoffAt ?? new Date().toISOString(), away_team: game.away, home_team: game.home, home_spread: toNumber(game.homeSpread), status: "scheduled" }));
-  const { data: storedGames, error: gameError } = await supabase.from("games").upsert(gameRows, { onConflict: "provider,provider_game_id" }).select("id");
+  const { data: storedGames, error: gameError } = await supabase.from("games").upsert(gameRows, { onConflict: "provider,provider_game_id" }).select("id, provider_game_id");
   if (gameError) throw gameError;
   const { error: removeError } = await supabase.from("week_games").delete().eq("week_id", week.id);
   if (removeError) throw removeError;
   const { error: mapError } = await supabase.from("week_games").insert(storedGames.map((game) => ({ week_id: week.id, game_id: game.id })));
   if (mapError) throw mapError;
-  return week.id;
+  const tiebreakerId = storedGames.find((game) => game.provider_game_id === tiebreakerGameId)?.id ?? null;
+  const { error: tiebreakerError } = await supabase.from("pick_weeks").update({ tiebreaker_game_id: tiebreakerId }).eq("id", week.id);
+  if (tiebreakerError) throw tiebreakerError;
+  return { id: week.id, season, week_number: weekNumber, title, lock_at: lockAt, tiebreaker_game_id: tiebreakerId };
 }
