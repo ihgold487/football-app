@@ -1,0 +1,25 @@
+:root { font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #eff8ee; background: #07150e; font-synthesis: none; }
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 320px; background: radial-gradient(circle at 85% 0%, #1a5239 0, transparent 30rem), #07150e; }
+button, input { font: inherit; }
+button { cursor: pointer; }
+.app-shell { width: min(100%, 760px); margin: 0 auto; padding: 18px 18px 42px; }
+.topbar, .week-header, .picks-heading, .tiebreaker { display: flex; align-items: center; justify-content: space-between; gap: 18px; }
+.topbar { padding: 6px 0 28px; }
+.brand { display: flex; align-items: center; gap: 10px; font-size: 1.05rem; font-weight: 800; letter-spacing: -.02em; }
+.brand-mark { display: grid; place-items: center; width: 29px; height: 29px; border-radius: 8px; color: #072010; background: #d7fe53; font-size: .9rem; }
+.profile-button, .score-chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid #38634a; border-radius: 999px; color: #eff8ee; background: #102a1c; }
+.profile-button { padding: 7px 9px 7px 11px; font-size: .78rem; font-weight: 800; }
+.score-chip { padding: 9px 12px; color: #d7fe53; font-size: .88rem; font-weight: 700; white-space: nowrap; }
+.eyebrow { margin: 0 0 5px; color: #9cc7a6; font-size: .73rem; font-weight: 800; letter-spacing: .11em; }
+h1 { margin: 0; font-size: clamp(2.2rem, 8vw, 3.25rem); letter-spacing: -.07em; line-height: .95; }
+h2 { margin: 0; font-size: 1.18rem; letter-spacing: -.03em; } p { color: #b7d0bd; }
+.week-header { margin-bottom: 24px; }
+.lock-banner { display: flex; gap: 13px; align-items: center; padding: 15px; border: 1px solid #2b704a; border-radius: 14px; background: linear-gradient(100deg, #123b26, #0e2c1d); color: #d7fe53; }
+.lock-banner div { display: grid; gap: 3px; }.lock-banner strong { font-size: .93rem; }.lock-banner span { color: #b5d9bf; font-size: .82rem; }
+.picks-heading { margin: 29px 1px 13px; }.picks-heading p, .tiebreaker p { margin: 4px 0 0; font-size: .9rem; }.pick-count { min-width: 50px; padding: 6px 9px; border-radius: 999px; color: #d7fe53; background: #173a26; text-align: center; font-size: .8rem; font-weight: 800; }
+.games { display: grid; gap: 10px; }.game-card { overflow: hidden; border: 1px solid #254833; border-radius: 15px; background: #0d2117; }.game-meta { display: flex; justify-content: space-between; padding: 11px 14px 8px; color: #8db89a; font-size: .73rem; font-weight: 750; letter-spacing: .06em; }.game-meta span:first-child { color: #d7fe53; }
+.game-teams { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 0 9px 10px; }.pick-option { position: relative; display: flex; align-items: center; gap: 7px; min-height: 49px; padding: 10px 11px; border: 1px solid #315940; border-radius: 10px; color: #eaf5eb; background: #102a1c; text-align: left; }.pick-option span { flex: 1; font-size: .92rem; font-weight: 700; }.pick-option strong { color: #a9caae; font-size: .87rem; }.pick-option.is-selected { border-color: #d7fe53; color: #09180e; background: #d7fe53; }.pick-option.is-selected strong { color: #254c31; }
+.tiebreaker { margin-top: 20px; padding: 18px; border: 1px solid #416953; border-radius: 15px; background: #153322; }.tiebreaker label { position: relative; display: flex; align-items: center; }.tiebreaker input { width: 82px; padding: 10px 30px 10px 10px; border: 1px solid #5b8468; border-radius: 9px; color: #f4fbf3; background: #0a1b11; font-size: 1.1rem; font-weight: 800; }.tiebreaker label > span:last-child { position: absolute; right: 8px; color: #9cc7a6; font-size: .65rem; font-weight: 800; }.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); }
+.notice { display: flex; gap: 8px; align-items: flex-start; margin: 15px 2px; color: #ffe6a4; font-size: .88rem; line-height: 1.4; }.notice svg { flex: none; margin-top: 1px; }.save-button { width: 100%; margin-top: 17px; padding: 15px; border: 0; border-radius: 11px; color: #0b1a10; background: #d7fe53; font-weight: 900; font-size: 1rem; }.save-button:hover { background: #e3ff86; }.demo-note { margin: 16px 0 0; color: #719479; text-align: center; font-size: .75rem; }
+@media (max-width: 440px) { .app-shell { padding-inline: 13px; }.score-chip span { display: none; }.game-teams { gap: 6px; padding-inline: 7px; }.pick-option { padding-inline: 8px; }.pick-option span { font-size: .84rem; }.pick-option strong { font-size: .78rem; }.tiebreaker { align-items: flex-end; padding: 15px; } }
