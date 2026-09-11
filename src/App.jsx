@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Check, ChevronDown, CircleAlert, LockKeyhole, Trophy } from "lucide-react";
 import { demoGames, demoWeek } from "./data/demoSlate";
+import { loadEspnFbsGames } from "./data/providers/espn";
 
 const LOCAL_PICKS_KEY = "saturday-slate-demo-picks-v1";
 
@@ -22,7 +23,7 @@ function GameCard({ game, selection, onPick }) {
     <article className="game-card">
       <div className="game-meta">
         <span>{game.league}</span>
-        <span>{game.kickoff}</span>
+        <span>{game.kickoff}{game.spreadDetail ? ` · ${game.spreadDetail}` : ""}</span>
       </div>
       <div className="game-teams">
         {choices.map((choice) => {
@@ -51,8 +52,12 @@ export default function App() {
   const [picks, setPicks] = useState(localPicks.picks);
   const [totalPoints, setTotalPoints] = useState(localPicks.totalPoints);
   const [notice, setNotice] = useState("");
+  const [games, setGames] = useState(demoGames);
+  const [dataSource, setDataSource] = useState("sample");
+  const [slateDate, setSlateDate] = useState("2026-09-12");
+  const [loadingGames, setLoadingGames] = useState(false);
   const pickedCount = Object.keys(picks).length;
-  const missing = demoGames.length - pickedCount;
+  const missing = games.length - pickedCount;
   const formattedLock = useMemo(
     () => new Intl.DateTimeFormat("en-US", { weekday: "long", hour: "numeric", minute: "2-digit", timeZoneName: "short" }).format(new Date(demoWeek.lockAt)),
     []
@@ -75,6 +80,28 @@ export default function App() {
     setNotice("All picks are saved on this device. You can refresh the page to verify they remain here.");
   }
 
+  async function loadGames() {
+    if (dataSource === "sample") {
+      setGames(demoGames);
+      setPicks({});
+      setNotice("Sample slate loaded. It is for interface testing only.");
+      return;
+    }
+    setLoadingGames(true);
+    setNotice("");
+    try {
+      const importedGames = await loadEspnFbsGames(slateDate);
+      if (!importedGames.length) throw new Error("No FBS games were returned for that date.");
+      setGames(importedGames);
+      setPicks({});
+      setNotice(`Loaded ${importedGames.length} FBS games from ESPN. Lines marked unavailable need another provider or admin confirmation.`);
+    } catch (error) {
+      setNotice(`Could not load ESPN data: ${error.message} Sample games are still available.`);
+    } finally {
+      setLoadingGames(false);
+    }
+  }
+
   return (
     <main className="app-shell">
       <header className="topbar">
@@ -95,13 +122,25 @@ export default function App() {
         <div><strong>Picks lock {formattedLock}</strong><span>One hour before the first included NCAA game</span></div>
       </section>
 
+      <section className="source-panel" aria-label="Development data source">
+        <div><p className="eyebrow">DEVELOPMENT DATA</p><strong>Preview a game source</strong></div>
+        <div className="source-controls">
+          <select value={dataSource} onChange={(event) => setDataSource(event.target.value)} aria-label="Game data source">
+            <option value="sample">Sample slate</option>
+            <option value="espn">ESPN FBS (experimental)</option>
+          </select>
+          {dataSource === "espn" && <input aria-label="ESPN slate date" type="date" value={slateDate} onChange={(event) => setSlateDate(event.target.value)} />}
+          <button disabled={loadingGames} onClick={loadGames} type="button">{loadingGames ? "Loading…" : "Load games"}</button>
+        </div>
+      </section>
+
       <section className="picks-heading">
         <div><h2>Make your picks</h2><p>Choose the team that covers the spread.</p></div>
-        <span className="pick-count">{pickedCount} / {demoGames.length}</span>
+        <span className="pick-count">{pickedCount} / {games.length}</span>
       </section>
 
       <section className="games" aria-label="Week 2 games">
-        {demoGames.map((game) => <GameCard game={game} key={game.id} selection={picks[game.id]} onPick={pickGame} />)}
+        {games.map((game) => <GameCard game={game} key={game.id} selection={picks[game.id]} onPick={pickGame} />)}
       </section>
 
       <section className="tiebreaker">
@@ -111,7 +150,7 @@ export default function App() {
 
       {notice && <p className="notice"><CircleAlert size={18} />{notice}</p>}
       <button className="save-button" onClick={savePicks} type="button">Save {pickedCount ? "my picks" : "picks"}</button>
-      <p className="demo-note">Development preview · picks are saved only on this device</p>
+      <p className="demo-note">Development preview · picks are saved only on this device · provider data is not yet published to a weekly slate</p>
     </main>
   );
 }
