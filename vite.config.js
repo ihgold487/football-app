@@ -3,6 +3,9 @@ import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
 
 export default defineConfig({
+  define: {
+    __SATURDAY_SLATE_BUILD__: JSON.stringify(new Date().toISOString()),
+  },
   plugins: [
     react(),
     VitePWA({
@@ -11,8 +14,8 @@ export default defineConfig({
         name: "Saturday Slate",
         short_name: "Slate",
         description: "Weekly football picks for your group.",
-        theme_color: "#0c2318",
-        background_color: "#0c2318",
+        theme_color: "#080d1c",
+        background_color: "#080d1c",
         display: "standalone",
         icons: [
           { src: "icons/icon-192.png", sizes: "192x192", type: "image/png" },

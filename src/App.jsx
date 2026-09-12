@@ -1,16 +1,49 @@
 import { useEffect, useMemo, useState } from "react";
 import { Check, ChevronDown, CircleAlert, ClipboardCheck, LockKeyhole, Settings, Trophy } from "lucide-react";
 import { demoGames, demoWeek } from "./data/demoSlate";
-import { loadEspnFbsGames, loadEspnNflGames } from "./data/providers/espn";
+import { loadEspnFbsGames, loadEspnLiveScores, loadEspnNflGames } from "./data/providers/espn";
 import { getApprovalStatus, getSession, onAuthChange, signIn, signUp } from "./lib/auth";
-import { loadPublishedWeek, loadUserApprovals, publishWeek, savePick, saveTiebreaker, updateUserApproval } from "./lib/footballData";
+import { loadPublishedWeek, loadUserApprovals, loadWeekResults, publishWeek, savePick, saveTiebreaker, updateUserApproval } from "./lib/footballData";
 import { isSupabaseConfigured } from "./lib/supabase";
 
 const LOCAL_PICKS_KEY = "saturday-slate-demo-picks-v1";
 const LOCAL_SLATE_KEY = "saturday-slate-local-slate-v1";
 const WOLVERINE_HELMET = `${import.meta.env.BASE_URL}icons/icon-512.png`;
 const LIONS_HELMET = `${import.meta.env.BASE_URL}helmets/lions-helmet-silver.png`;
+const OWNER_EMAIL = "ihgold@comcast.net";
+const BUILD_TIME = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short" }).format(new Date(__SATURDAY_SLATE_BUILD__));
 const loadLocal = (key, fallback) => { try { return JSON.parse(localStorage.getItem(key)) || fallback; } catch { return fallback; } };
+
+function BuildStamp() {
+  const [checking, setChecking] = useState(false);
+  async function checkForUpdate() {
+    setChecking(true);
+    try {
+      const registration = "serviceWorker" in navigator ? await navigator.serviceWorker.getRegistration() : null;
+      await registration?.update();
+      // The PWA is configured for auto-update. Reload after checking so a
+      // newly activated worker and its freshly cached bundle take effect.
+      window.setTimeout(() => window.location.reload(), 900);
+    } catch {
+      window.location.reload();
+    }
+  }
+  return <div className="build-stamp"><span>Build {BUILD_TIME}</span><button disabled={checking} onClick={checkForUpdate} type="button">{checking ? "Updating…" : "Check for update"}</button></div>;
+}
+
+function compactTeamName(fullName) {
+  const name = String(fullName ?? "").replace(/^\(\d+\)\s*/, "");
+  const multiWordMascots = /\s+(?:Golden Gophers|Horned Frogs|Ragin' Cajuns|Fighting Irish|Crimson Tide|Red Raiders|Blue Devils|Tar Heels|Wolf Pack|Nittany Lions|Mountaineers|Yellow Jackets|Green Wave|Rainbow Warriors)$/;
+  if (multiWordMascots.test(name)) return name.replace(multiWordMascots, "");
+  const words = name.split(/\s+/);
+  return words.length > 1 ? words.slice(0, -1).join(" ") : name;
+}
+
+function resultHeaderTeam(game, side) {
+  const fullName = game[side];
+  const shortName = game[`${side}ShortName`];
+  return shortName && shortName !== fullName ? shortName.replace(/^\(\d+\)\s*/, "") : compactTeamName(fullName);
+}
 
 function SignInScreen() {
   const [mode, setMode] = useState("sign-in"); const [email, setEmail] = useState(""); const [password, setPassword] = useState(""); const [displayName, setDisplayName] = useState(""); const [message, setMessage] = useState(""); const [working, setWorking] = useState(false);
@@ -112,7 +145,7 @@ function PicksPage({ games, picks, setPicks, totalPoints, setTotalPoints, notice
   const pickGame = (gameId, side) => { setPicks((current) => ({ ...current, [gameId]: side })); setNotice(""); };
   const savePicks = async () => {
     if (missing) { setNotice(`${missing} ${missing === 1 ? "game is" : "games are"} still blank. You can change picks until the lock, but blank picks receive zero points.`); return; }
-    if (cloudWeek?.id) { try { await Promise.all(Object.entries(picks).map(([gameId, side]) => savePick(cloudWeek.id, gameId, side))); await saveTiebreaker(cloudWeek.id, totalPoints); setNotice("Your picks are securely saved."); } catch (error) { setNotice(`Could not save your picks: ${error.message}`); } return; }
+    if (cloudWeek?.id) { try { const currentGameIds = new Set(games.map((game) => game.id)); const picksToSave = Object.entries(picks).filter(([gameId]) => currentGameIds.has(gameId)); await Promise.all(picksToSave.map(([gameId, side]) => savePick(cloudWeek.id, gameId, side))); await saveTiebreaker(cloudWeek.id, totalPoints); setNotice("Your picks are securely saved."); } catch (error) { setNotice(`Could not save your picks: ${error.message}`); } return; }
     setNotice("All picks are saved on this device. You can refresh the page to verify they remain here.");
   };
   return <>
@@ -123,6 +156,43 @@ function PicksPage({ games, picks, setPicks, totalPoints, setTotalPoints, notice
     <section className="tiebreaker"><div><p className="eyebrow">TIEBREAKER</p><h2>{demoWeek.tieBreaker}</h2><p>Predict the combined final score.</p></div><label><span className="sr-only">Total points prediction</span><input min="0" max="200" onChange={(event) => setTotalPoints(event.target.value)} type="number" value={totalPoints} /><span>PTS</span></label></section>
     {notice && <p className="notice"><CircleAlert size={18} />{notice}</p>}<button className="save-button" onClick={savePicks} type="button">Save {pickedCount ? "my picks" : "picks"}</button><p className="demo-note">Development preview · picks are saved only on this device</p>
   </>;
+}
+
+function ScoresPage({ games }) {
+  const [scores, setScores] = useState({});
+  const [loading, setLoading] = useState(true);
+  const [message, setMessage] = useState("");
+  const [updatedAt, setUpdatedAt] = useState(null);
+  async function refreshScores() {
+    if (!games.length) { setLoading(false); return; }
+    setLoading(true); setMessage("");
+    try { setScores(await loadEspnLiveScores(games)); setUpdatedAt(new Date()); }
+    catch (error) { setMessage(`Could not load live scores: ${error.message}`); }
+    finally { setLoading(false); }
+  }
+  useEffect(() => { refreshScores(); const timer = window.setInterval(refreshScores, 60_000); return () => window.clearInterval(timer); }, [games]);
+  const sections = ["NCAA", "NFL"].map((league) => ({ league, games: games.filter((game) => game.league === league) })).filter((section) => section.games.length);
+  return <><section className="week-header"><div><p className="eyebrow">LIVE SCOREBOARD</p><h1>Scores</h1></div><div className="score-chip"><Trophy size={17} /><span>Live</span></div></section><section className="scores-intro"><div><h2>Included games</h2><p>{updatedAt ? `Updated ${new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit", second: "2-digit" }).format(updatedAt)} · refreshes every minute` : "Loading ESPN scores…"}</p></div><button className="refresh-button" disabled={loading} onClick={refreshScores} type="button">{loading ? "Refreshing…" : "Refresh"}</button></section>{message && <p className="notice"><CircleAlert size={18} />{message}</p>}{sections.map((section) => <section className="score-section" key={section.league}><h2>{section.league}</h2><div className="score-list">{section.games.map((game) => { const score = scores[game.id]; const isLive = score?.state === "in"; const isFinal = score?.state === "post"; return <article className="score-card" key={game.id}><div className="score-meta"><span>{isLive ? "LIVE" : isFinal ? "FINAL" : game.kickoff}</span><span>{score?.detail ?? "Scheduled"}</span></div><div className="score-team"><strong>{game.away}</strong><b>{score?.awayScore ?? "—"}</b></div><div className="score-team"><strong>{game.home}</strong><b>{score?.homeScore ?? "—"}</b></div></article>; })}</div></section>)}</>;
+}
+
+function ResultsPage({ games, cloudWeek, viewerId }) {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState("");
+  const lockAt = cloudWeek?.lock_at ?? cloudWeek?.lockAt;
+  const isLocked = Boolean(lockAt && new Date() >= new Date(lockAt));
+  const formattedLock = lockAt ? new Intl.DateTimeFormat("en-US", { weekday: "long", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short" }).format(new Date(lockAt)) : null;
+  async function refreshResults() {
+    if (!cloudWeek?.id || (!isLocked && !viewerId)) return;
+    setLoading(true); setMessage("");
+    try { setRows(await loadWeekResults(cloudWeek.id, isLocked ? null : viewerId)); }
+    catch (error) { setMessage(`Could not load results: ${error.message}`); }
+    finally { setLoading(false); }
+  }
+  useEffect(() => { refreshResults(); }, [cloudWeek?.id, isLocked, viewerId]);
+  const outcomeLabel = (outcome) => ({ win: "W", loss: "L", push: "Push", void: "Void", pending: "Pending" }[outcome] ?? "Pending");
+  if (!cloudWeek) return <><section className="week-header"><div><p className="eyebrow">WEEKLY RESULTS</p><h1>Results</h1></div><div className="score-chip"><Trophy size={17} /><span>Scores</span></div></section><section className="results-placeholder"><h2>No shared slate yet</h2><p>Publish a weekly slate to make its results available after the pick deadline.</p></section></>;
+  return <><section className="week-header"><div><p className="eyebrow">WEEKLY RESULTS</p><h1>{cloudWeek.title}</h1></div><div className="score-chip">{isLocked ? <Trophy size={17} /> : <LockKeyhole size={17} />}<span>{isLocked ? `${rows.length} players` : "Private preview"}</span></div></section><section className="results-intro"><div><h2>{isLocked ? "Everyone’s picks" : "Your submitted picks"}</h2><p>{isLocked ? "Final games will receive a win, loss, push, or void and update the totals here." : `Only you can see this preview. Everyone else's picks remain private until ${formattedLock}.`}</p></div><button className="refresh-button" disabled={loading} onClick={refreshResults} type="button">{loading ? "Refreshing…" : "Refresh"}</button></section>{message && <p className="notice"><CircleAlert size={18} />{message}</p>}{!loading && !rows.length && <section className="results-placeholder"><h2>{isLocked ? "No saved picks" : "No submitted picks yet"}</h2><p>{isLocked ? "No one submitted a pick for this slate before it locked." : "Save your picks from the Picks page to see your private preview here."}</p></section>}<div className="results-scroll"><table className="results-table"><thead><tr><th>Player</th><th className="correct-header">Correct</th>{games.map((game) => <th key={game.id}><span>{game.league}</span><b>{resultHeaderTeam(game, "away")}</b><i>@</i><b>{resultHeaderTeam(game, "home")}</b></th>)}<th>TB</th><th>Pts</th></tr></thead><tbody>{rows.map((row) => <tr key={row.userId}><th>{row.displayName}</th><td className="correct-cell">{row.correct}</td>{games.map((game) => { const pick = row.picks[game.id]; const team = pick ? resultHeaderTeam(game, pick.side) : "—"; return <td className={pick ? `result-cell ${pick.outcome}` : "result-cell"} key={game.id}>{pick ? <><strong>{team}</strong><span className={`result-status ${pick.outcome}`}>{outcomeLabel(pick.outcome)}</span></> : <span className="no-pick">—</span>}</td>; })}<td>{row.tiebreaker ?? "—"}</td><td className="points-cell">{row.points}</td></tr>)}</tbody></table></div><p className="demo-note">Scoring automation is the next step; until then, ungraded selections remain Pending.</p></>;
 }
 
 export default function App() {
@@ -140,23 +210,34 @@ export default function App() {
   useEffect(() => { localStorage.setItem(LOCAL_PICKS_KEY, JSON.stringify({ picks, totalPoints })); }, [picks, totalPoints]);
   useEffect(() => {
     if (!isSupabaseConfigured) return undefined;
-    const update = async (nextSession) => { setSession(nextSession); setApproval(nextSession ? await getApprovalStatus() : null); setAuthReady(true); };
+    const update = (nextSession) => {
+      setSession(nextSession); setAuthReady(true);
+      if (!nextSession) { setApproval(null); return; }
+      // The database remains the authority for all protected operations. This
+      // owner fast-path only prevents a slow status RPC from holding the PWA
+      // on its startup screen.
+      if (nextSession.user.email?.toLowerCase() === OWNER_EMAIL) setApproval({ status: "approved", is_owner: true });
+      getApprovalStatus().then(setApproval).catch(() => setNotice("Could not confirm account access. Try reopening or checking your connection."));
+    };
+    const fallbackTimer = window.setTimeout(() => setAuthReady(true), 2_500);
     getSession().then(update).catch(() => setAuthReady(true));
-    return onAuthChange(update);
+    const unsubscribe = onAuthChange(update);
+    return () => { window.clearTimeout(fallbackTimer); unsubscribe(); };
   }, []);
   useEffect(() => {
     if (!isSupabaseConfigured || approval?.status !== "approved") return;
     loadPublishedWeek().then((week) => { if (week) { setCloudWeek(week); setGames(week.games); } }).catch((error) => setNotice(`Could not load the shared slate: ${error.message}`));
   }, [approval]);
   async function publishGames(nextSlate) {
+    let gamesForPicks = nextSlate.games;
     if (isSupabaseConfigured) {
-      try { const week = await publishWeek(nextSlate); setCloudWeek(week); setNotice("The slate is published for approved users."); }
+      try { const week = await publishWeek(nextSlate); setCloudWeek(week); gamesForPicks = week.games; setNotice("The slate is published for approved users."); }
       catch (error) { setNotice(`Could not publish the slate: ${error.message}`); return; }
     } else { localStorage.setItem(LOCAL_SLATE_KEY, JSON.stringify({ games: nextSlate.games, selectedIds: nextSlate.games.map((game) => game.id) })); setNotice("Your new slate is ready for local pick testing."); }
-    setGames(nextSlate.games); setPicks({}); setPage("picks");
+    setGames(gamesForPicks); setPicks({}); setPage("picks");
   }
   if (!authReady) return <main className="app-shell"><p className="demo-note">Checking your account…</p></main>;
   if (isSupabaseConfigured && !session) return <SignInScreen />;
   if (isSupabaseConfigured && approval?.status !== "approved") return <main className="app-shell auth-shell"><section className="auth-card"><p className="eyebrow">ACCESS PENDING</p><h1>Your account is waiting for approval.</h1><p>You’ll be able to make picks after the group administrator approves your request.</p></section></main>;
-  return <main className="app-shell"><header className="topbar"><div className="brand"><span aria-hidden="true" className="helmet-morph"><img className="helmet-wolverine" src={WOLVERINE_HELMET} /><img className="helmet-lions" src={LIONS_HELMET} /></span><span>Saturday Slate</span></div><button className="profile-button" type="button" aria-label="Open account menu">IG <ChevronDown size={15} /></button></header><nav className="page-nav" aria-label="Main navigation"><button className={page === "picks" ? "active" : ""} onClick={() => setPage("picks")} type="button">Picks</button>{(!isSupabaseConfigured || approval?.is_owner) && <button className={page === "admin" ? "active" : ""} onClick={() => setPage("admin")} type="button">Admin</button>}</nav>{page === "admin" ? <AdminPage onPublish={publishGames} ownerId={session?.user?.id} /> : <PicksPage games={games} picks={picks} setPicks={setPicks} totalPoints={totalPoints} setTotalPoints={setTotalPoints} notice={notice} setNotice={setNotice} cloudWeek={cloudWeek} />}</main>;
+  return <main className="app-shell"><header className="topbar"><div className="brand"><span aria-hidden="true" className="helmet-morph"><img className="helmet-wolverine" src={WOLVERINE_HELMET} /><img className="helmet-lions" src={LIONS_HELMET} /></span><span>Saturday Slate</span></div><button className="profile-button" type="button" aria-label="Open account menu">IG <ChevronDown size={15} /></button></header><nav className="page-nav" aria-label="Main navigation"><button className={page === "picks" ? "active" : ""} onClick={() => setPage("picks")} type="button">Picks</button><button className={page === "scores" ? "active" : ""} onClick={() => setPage("scores")} type="button">Scores</button><button className={page === "results" ? "active" : ""} onClick={() => setPage("results")} type="button">Results</button>{(!isSupabaseConfigured || approval?.is_owner) && <button className={page === "admin" ? "active" : ""} onClick={() => setPage("admin")} type="button">Admin</button>}</nav>{page === "admin" ? <AdminPage onPublish={publishGames} ownerId={session?.user?.id} /> : page === "scores" ? <ScoresPage games={games} /> : page === "results" ? <ResultsPage cloudWeek={cloudWeek} games={games} viewerId={session?.user?.id} /> : <PicksPage games={games} picks={picks} setPicks={setPicks} totalPoints={totalPoints} setTotalPoints={setTotalPoints} notice={notice} setNotice={setNotice} cloudWeek={cloudWeek} />}<BuildStamp /></main>;
 }

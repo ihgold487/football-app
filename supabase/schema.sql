@@ -45,6 +45,8 @@ create table public.games (
   kickoff_at timestamptz not null,
   away_team text not null,
   home_team text not null,
+  away_short_name text,
+  home_short_name text,
   -- Positive means the home team is receiving points; half-point values are preferred.
   home_spread numeric(4,1),
   away_score integer,
@@ -192,8 +194,20 @@ create policy "users read approval" on public.app_user_approvals for select usin
 create policy "approved users read weeks" on public.pick_weeks for select using (public.is_approved_user());
 create policy "approved users read games" on public.games for select using (public.is_approved_user());
 create policy "approved users read week games" on public.week_games for select using (public.is_approved_user());
-create policy "users read own picks" on public.picks for select using (user_id = auth.uid() or public.is_app_owner());
-create policy "users read own tiebreaker" on public.week_tiebreakers for select using (user_id = auth.uid() or public.is_app_owner());
+create policy "picks visible after lock" on public.picks for select using (
+  public.is_approved_user() and (
+    user_id = auth.uid()
+    or public.is_app_owner()
+    or exists (select 1 from public.pick_weeks where id = week_id and now() >= lock_at)
+  )
+);
+create policy "tiebreakers visible after lock" on public.week_tiebreakers for select using (
+  public.is_approved_user() and (
+    user_id = auth.uid()
+    or public.is_app_owner()
+    or exists (select 1 from public.pick_weeks where id = week_id and now() >= lock_at)
+  )
+);
 create policy "approved users read results" on public.pick_results for select using (public.is_approved_user());
 create policy "owner manages weeks" on public.pick_weeks for all using (public.is_app_owner()) with check (public.is_app_owner());
 create policy "owner manages games" on public.games for all using (public.is_app_owner()) with check (public.is_app_owner());

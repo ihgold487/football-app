@@ -42,6 +42,8 @@ function formatGame(event, league) {
     kickoff: new Intl.DateTimeFormat("en-US", { weekday: "short", hour: "numeric", minute: "2-digit" }).format(new Date(event.date)),
     away: withRank(away),
     home: withRank(home),
+    awayShortName: away.team.shortDisplayName ?? away.team.displayName,
+    homeShortName: home.team.shortDisplayName ?? home.team.displayName,
     awaySpread: line.awaySpread,
     homeSpread: line.homeSpread,
     spreadDetail: line.spreadDetail,
@@ -79,4 +81,28 @@ export async function loadEspnNflGames(saturdayDate) {
     seen.add(game.id);
     return true;
   }).sort((left, right) => new Date(left.kickoffAt) - new Date(right.kickoffAt));
+}
+
+export async function loadEspnLiveScores(games) {
+  const requests = new Map();
+  for (const game of games) {
+    if (!game.providerGameId || !game.kickoffAt) continue;
+    const path = game.league === "NFL" ? "nfl" : "college-football";
+    const key = `${path}:${game.kickoffAt.slice(0, 10)}`;
+    requests.set(key, { path, date: game.kickoffAt.slice(0, 10), group: path === "college-football" ? "80" : undefined });
+  }
+  const scoreboards = await Promise.all([...requests.values()].map(async (request) => ({ request, events: await loadScoreboard(request.path, request.date, request.group) })));
+  const eventsById = new Map(scoreboards.flatMap(({ events }) => events.map((event) => [event.id, event])));
+  return Object.fromEntries(games.map((game) => {
+    const event = eventsById.get(String(game.providerGameId).replace("espn-", ""));
+    const competition = event?.competitions?.[0];
+    const home = competition?.competitors?.find((team) => team.homeAway === "home");
+    const away = competition?.competitors?.find((team) => team.homeAway === "away");
+    return [game.id, event ? {
+      state: event.status?.type?.state ?? "pre",
+      detail: event.status?.type?.shortDetail ?? "Scheduled",
+      homeScore: home?.score ?? "—",
+      awayScore: away?.score ?? "—",
+    } : null];
+  }));
 }
