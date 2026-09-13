@@ -2,8 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { Check, ChevronDown, CircleAlert, ClipboardCheck, LockKeyhole, Settings, Trophy } from "lucide-react";
 import { demoGames, demoWeek } from "./data/demoSlate";
 import { loadEspnFbsGames, loadEspnLiveScores, loadEspnNflGames } from "./data/providers/espn";
-import { getApprovalStatus, getSession, onAuthChange, signIn, signUp } from "./lib/auth";
-import { loadPublishedWeek, loadUserApprovals, loadWeekResults, publishWeek, savePick, saveTiebreaker, updateUserApproval } from "./lib/footballData";
+import { getApprovalStatus, getSession, onAuthChange, signIn, signOut, signUp } from "./lib/auth";
+import { loadPublishedWeek, loadSeasonPoints, loadUserApprovals, loadWeekResults, publishWeek, savePick, saveTiebreaker, syncFinalScoresAndGrade, updateUserApproval } from "./lib/footballData";
 import { isSupabaseConfigured } from "./lib/supabase";
 
 const LOCAL_PICKS_KEY = "saturday-slate-demo-picks-v1";
@@ -31,6 +31,17 @@ function BuildStamp() {
   return <div className="build-stamp"><span>Build {BUILD_TIME}</span><button disabled={checking} onClick={checkForUpdate} type="button">{checking ? "Updating…" : "Check for update"}</button></div>;
 }
 
+function AccountMenu({ session }) {
+  const [open, setOpen] = useState(false);
+  const displayName = session?.user?.user_metadata?.display_name || session?.user?.email || "Account";
+  const initials = displayName.split(/\s+/).filter(Boolean).map((part) => part[0]).join("").slice(0, 2).toUpperCase();
+  async function handleSignOut() {
+    await signOut();
+    setOpen(false);
+  }
+  return <div className="account-menu"><button aria-expanded={open} className="profile-button" onClick={() => setOpen((current) => !current)} type="button">{initials} <ChevronDown size={15} /></button>{open && <div className="account-popover"><strong>{displayName}</strong><span>{session?.user?.email}</span><button onClick={handleSignOut} type="button">Sign out</button></div>}</div>;
+}
+
 function compactTeamName(fullName) {
   const name = String(fullName ?? "").replace(/^\(\d+\)\s*/, "");
   const multiWordMascots = /\s+(?:Golden Gophers|Horned Frogs|Ragin' Cajuns|Fighting Irish|Crimson Tide|Red Raiders|Blue Devils|Tar Heels|Wolf Pack|Nittany Lions|Mountaineers|Yellow Jackets|Green Wave|Rainbow Warriors)$/;
@@ -45,17 +56,39 @@ function resultHeaderTeam(game, side) {
   return shortName && shortName !== fullName ? shortName.replace(/^\(\d+\)\s*/, "") : compactTeamName(fullName);
 }
 
+function outcomeFromLiveScore(game, side, score) {
+  if (!game || !side || !score?.completed) return null;
+  const homeSpread = Number(game.homeSpreadValue);
+  if (!Number.isFinite(homeSpread)) return "void";
+  const adjustedHomeMargin = Number(score.homeScore) - Number(score.awayScore) + homeSpread;
+  if (adjustedHomeMargin === 0) return "push";
+  return side === (adjustedHomeMargin > 0 ? "home" : "away") ? "win" : "loss";
+}
+
+function applyLiveOutcomes(rows, games, scores) {
+  const gamesById = new Map(games.map((game) => [game.id, game]));
+  return rows.map((row) => {
+    let correct = 0; let points = 0;
+    const picks = Object.fromEntries(Object.entries(row.picks).map(([gameId, pick]) => {
+      const outcome = outcomeFromLiveScore(gamesById.get(gameId), pick.side, scores[gameId]) ?? pick.outcome;
+      if (outcome === "win") { correct += 1; points += 1; }
+      return [gameId, { ...pick, outcome, points: outcome === "win" ? 1 : 0 }];
+    }));
+    return { ...row, picks, correct, points };
+  });
+}
+
 function SignInScreen() {
   const [mode, setMode] = useState("sign-in"); const [email, setEmail] = useState(""); const [password, setPassword] = useState(""); const [displayName, setDisplayName] = useState(""); const [message, setMessage] = useState(""); const [working, setWorking] = useState(false);
   async function submit(event) { event.preventDefault(); setWorking(true); setMessage(""); try { if (mode === "sign-in") await signIn(email, password); else { await signUp(email, password, displayName); setMessage("Account created. Check your email if confirmation is required, then wait for approval."); } } catch (error) { setMessage(error.message); } finally { setWorking(false); } }
   return <main className="app-shell auth-shell"><div className="brand"><span aria-hidden="true" className="helmet-morph"><img className="helmet-wolverine" src={WOLVERINE_HELMET} /><img className="helmet-lions" src={LIONS_HELMET} /></span><span>Saturday Slate</span></div><section className="auth-card"><p className="eyebrow">PRIVATE PICKS GROUP</p><h1>{mode === "sign-in" ? "Welcome back" : "Request access"}</h1><p>Sign in to make picks and follow the weekly slate.</p><form onSubmit={submit}>{mode === "sign-up" && <label>Display name<input required value={displayName} onChange={(event) => setDisplayName(event.target.value)} /></label>}<label>Email<input autoComplete="email" required type="email" value={email} onChange={(event) => setEmail(event.target.value)} /></label><label>Password<input autoComplete={mode === "sign-in" ? "current-password" : "new-password"} minLength="8" required type="password" value={password} onChange={(event) => setPassword(event.target.value)} /></label>{message && <p className="notice"><CircleAlert size={18} />{message}</p>}<button className="save-button" disabled={working} type="submit">{working ? "Please wait…" : mode === "sign-in" ? "Sign in" : "Create account"}</button></form><button className="auth-switch" onClick={() => setMode(mode === "sign-in" ? "sign-up" : "sign-in")} type="button">{mode === "sign-in" ? "Need an account? Request access" : "Already approved? Sign in"}</button></section></main>;
 }
 
-function GameCard({ game, selection, onPick }) {
+function GameCard({ game, selection, onPick, locked, outcome }) {
   const choices = [{ team: game.away, spread: game.awaySpread, side: "away" }, { team: game.home, spread: game.homeSpread, side: "home" }];
   return <article className="game-card"><div className="game-meta"><span>{game.league}</span><span>{game.kickoff}{game.spreadDetail ? ` · ${game.spreadDetail}` : ""}</span></div><div className="game-teams">{choices.map((choice) => {
     const selected = selection === choice.side;
-    return <button aria-pressed={selected} className={`pick-option ${selected ? "is-selected" : ""}`} key={choice.side} onClick={() => onPick(game.id, choice.side)} type="button"><span>{choice.team}</span><strong>{choice.spread}</strong>{selected && <Check aria-label="Selected" size={18} strokeWidth={3} />}</button>;
+    return <button aria-pressed={selected} className={`pick-option ${selected ? `is-selected ${outcome ?? ""}` : ""}`} disabled={locked} key={choice.side} onClick={() => onPick(game.id, choice.side)} type="button"><span>{choice.team}</span><strong>{choice.spread}</strong>{selected && <Check aria-label="Selected" size={18} strokeWidth={3} />}</button>;
   })}</div></article>;
 }
 
@@ -94,6 +127,7 @@ function AdminPage({ onPublish, ownerId }) {
   const [slateDate, setSlateDate] = useState("2026-09-12");
   const [season, setSeason] = useState(2026);
   const [weekNumber, setWeekNumber] = useState(2);
+  const [entryFee, setEntryFee] = useState(5);
   const [title, setTitle] = useState("Week 2");
   const [lockMode, setLockMode] = useState("automatic");
   const [customLockAt, setCustomLockAt] = useState("");
@@ -118,12 +152,12 @@ function AdminPage({ onPublish, ownerId }) {
     if (!effectiveLockAt) { setMessage("Choose a valid lock time after loading the schedule."); return; }
     if (!tiebreakerId) { setMessage("Choose the final NFL game for the tiebreaker."); return; }
     localStorage.setItem(LOCAL_SLATE_KEY, JSON.stringify({ games: selectedGames, selectedIds: selectedGames.map((game) => game.id) }));
-    onPublish({ season: Number(season), weekNumber: Number(weekNumber), title, lockAt: effectiveLockAt, lockRule: lockMode === "automatic" ? "first_ncaa_game_minus_60" : "custom", games: selectedGames, tiebreakerGameId: tiebreakerId });
+    onPublish({ season: Number(season), weekNumber: Number(weekNumber), title, lockAt: effectiveLockAt, lockRule: lockMode === "automatic" ? "first_ncaa_game_minus_60" : "custom", entryFee: Number(entryFee), games: selectedGames, tiebreakerGameId: tiebreakerId });
   }
   return <>
     <section className="week-header"><div><p className="eyebrow">ADMINISTRATION</p><h1>Set the slate</h1></div><div className="score-chip"><Settings size={17} /><span>Admin</span></div></section>
     <section className="admin-intro"><strong>Choose NCAA · all NFL included</strong><p>Load one football week, select the FBS games to include, and set the final NFL-game tiebreaker.</p></section>
-    <section className="week-settings"><label>Season<input min="2020" max="2100" onChange={(event) => setSeason(event.target.value)} type="number" value={season} /></label><label>Week<input min="1" max="30" onChange={(event) => { setWeekNumber(event.target.value); setTitle(`Week ${event.target.value}`); }} type="number" value={weekNumber} /></label><label className="week-title">Slate title<input onChange={(event) => setTitle(event.target.value)} value={title} /></label></section>
+    <section className="week-settings"><label>Season<input min="2020" max="2100" onChange={(event) => setSeason(event.target.value)} type="number" value={season} /></label><label>Week<input min="1" max="30" onChange={(event) => { setWeekNumber(event.target.value); setTitle(`Week ${event.target.value}`); }} type="number" value={weekNumber} /></label><label>Entry<input min="0" onChange={(event) => setEntryFee(event.target.value)} step="1" type="number" value={entryFee} /></label><label className="week-title">Slate title<input onChange={(event) => setTitle(event.target.value)} value={title} /></label></section>
     <section className="import-panel"><div><label htmlFor="slate-date">NCAA Saturday</label><input id="slate-date" type="date" value={slateDate} onChange={(event) => setSlateDate(event.target.value)} /></div><button disabled={loading} onClick={importFbsGames} type="button">{loading ? "Loading…" : "Load NCAA + NFL schedule"}</button></section>
     <section className="deadline-panel"><div><p className="eyebrow">PICK DEADLINE</p><h2>{automaticLockAt ? new Intl.DateTimeFormat("en-US", { weekday: "long", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short" }).format(automaticLockAt) : "Load a schedule first"}</h2><p>Default: one hour before the earliest NCAA or NFL game you include.</p></div><label className="lock-choice"><input checked={lockMode === "automatic"} onChange={() => setLockMode("automatic")} type="radio" name="lock-mode" />Use default</label><label className="lock-choice"><input checked={lockMode === "custom"} onChange={() => setLockMode("custom")} type="radio" name="lock-mode" />Custom<input disabled={lockMode !== "custom"} onChange={(event) => setCustomLockAt(event.target.value)} type="datetime-local" value={customLockAt || (lockMode === "custom" && automaticLockAt ? toLocalDateTime(automaticLockAt) : "")} /></label></section>
     <section className="selection-heading"><div><h2>Choose NCAA games</h2><p>ESPN is a free, experimental source for this prototype.</p></div><span className="pick-count">{selectedGames.length} total</span></section>
@@ -137,24 +171,28 @@ function AdminPage({ onPublish, ownerId }) {
 }
 
 function PicksPage({ games, picks, setPicks, totalPoints, setTotalPoints, notice, setNotice, cloudWeek }) {
+  const [liveScores, setLiveScores] = useState({});
   const pickedCount = Object.keys(picks).filter((id) => games.some((game) => game.id === id)).length;
   const missing = games.length - pickedCount;
   const activeWeek = cloudWeek ?? demoWeek;
   const lockAt = activeWeek.lock_at ?? activeWeek.lockAt;
+  const isLocked = new Date() >= new Date(lockAt);
   const formattedLock = useMemo(() => new Intl.DateTimeFormat("en-US", { weekday: "long", hour: "numeric", minute: "2-digit", timeZoneName: "short" }).format(new Date(lockAt)), [lockAt]);
-  const pickGame = (gameId, side) => { setPicks((current) => ({ ...current, [gameId]: side })); setNotice(""); };
+  useEffect(() => { if (!games.length) return undefined; const refresh = () => loadEspnLiveScores(games).then(setLiveScores).catch(() => {}); refresh(); const timer = window.setInterval(refresh, 60_000); return () => window.clearInterval(timer); }, [games]);
+  const pickGame = (gameId, side) => { if (isLocked) return; setPicks((current) => ({ ...current, [gameId]: side })); setNotice(""); };
   const savePicks = async () => {
+    if (isLocked) { setNotice("Picks are locked for this week and can no longer be changed."); return; }
     if (missing) { setNotice(`${missing} ${missing === 1 ? "game is" : "games are"} still blank. You can change picks until the lock, but blank picks receive zero points.`); return; }
     if (cloudWeek?.id) { try { const currentGameIds = new Set(games.map((game) => game.id)); const picksToSave = Object.entries(picks).filter(([gameId]) => currentGameIds.has(gameId)); await Promise.all(picksToSave.map(([gameId, side]) => savePick(cloudWeek.id, gameId, side))); await saveTiebreaker(cloudWeek.id, totalPoints); setNotice("Your picks are securely saved."); } catch (error) { setNotice(`Could not save your picks: ${error.message}`); } return; }
     setNotice("All picks are saved on this device. You can refresh the page to verify they remain here.");
   };
   return <>
     <section className="week-header"><div><p className="eyebrow">{activeWeek.season} FOOTBALL PICKS</p><h1>{activeWeek.title ?? activeWeek.label}</h1></div><div className="score-chip"><Trophy size={17} /><span>Standings</span></div></section>
-    <section className="lock-banner" aria-label="Pick deadline"><LockKeyhole size={20} /><div><strong>Picks lock {formattedLock}</strong><span>One hour before the earliest included game</span></div></section>
+    <section className={`lock-banner ${isLocked ? "is-locked" : ""}`} aria-label="Pick deadline"><LockKeyhole size={20} /><div><strong>{isLocked ? "Picks are locked" : `Picks lock ${formattedLock}`}</strong><span>{isLocked ? "Selections are now final." : "One hour before the earliest included game"}</span></div></section>
     <section className="picks-heading"><div><h2>Make your picks</h2><p>Choose the team that covers the spread.</p></div><span className="pick-count">{pickedCount} / {games.length}</span></section>
-    <section className="games" aria-label="Week 2 games">{games.map((game) => <GameCard game={game} key={game.id} selection={picks[game.id]} onPick={pickGame} />)}</section>
-    <section className="tiebreaker"><div><p className="eyebrow">TIEBREAKER</p><h2>{demoWeek.tieBreaker}</h2><p>Predict the combined final score.</p></div><label><span className="sr-only">Total points prediction</span><input min="0" max="200" onChange={(event) => setTotalPoints(event.target.value)} type="number" value={totalPoints} /><span>PTS</span></label></section>
-    {notice && <p className="notice"><CircleAlert size={18} />{notice}</p>}<button className="save-button" onClick={savePicks} type="button">Save {pickedCount ? "my picks" : "picks"}</button><p className="demo-note">Development preview · picks are saved only on this device</p>
+    <section className="games" aria-label="Week 2 games">{games.map((game) => <GameCard game={game} key={game.id} locked={isLocked} outcome={outcomeFromLiveScore(game, picks[game.id], liveScores[game.id])} selection={picks[game.id]} onPick={pickGame} />)}</section>
+    <section className="tiebreaker"><div><p className="eyebrow">TIEBREAKER</p><h2>{demoWeek.tieBreaker}</h2><p>Predict the combined final score.</p></div><label><span className="sr-only">Total points prediction</span><input disabled={isLocked} min="0" max="200" onChange={(event) => setTotalPoints(event.target.value)} type="number" value={totalPoints} /><span>PTS</span></label></section>
+    {notice && <p className="notice"><CircleAlert size={18} />{notice}</p>}<button className="save-button" disabled={isLocked} onClick={savePicks} type="button">{isLocked ? "Picks locked" : `Save ${pickedCount ? "my picks" : "picks"}`}</button><p className="demo-note">Development preview · picks are saved only on this device</p>
   </>;
 }
 
@@ -166,33 +204,58 @@ function ScoresPage({ games }) {
   async function refreshScores() {
     if (!games.length) { setLoading(false); return; }
     setLoading(true); setMessage("");
-    try { setScores(await loadEspnLiveScores(games)); setUpdatedAt(new Date()); }
+    try { const nextScores = await loadEspnLiveScores(games); setScores(nextScores); setUpdatedAt(new Date()); }
     catch (error) { setMessage(`Could not load live scores: ${error.message}`); }
     finally { setLoading(false); }
   }
   useEffect(() => { refreshScores(); const timer = window.setInterval(refreshScores, 60_000); return () => window.clearInterval(timer); }, [games]);
   const sections = ["NCAA", "NFL"].map((league) => ({ league, games: games.filter((game) => game.league === league) })).filter((section) => section.games.length);
-  return <><section className="week-header"><div><p className="eyebrow">LIVE SCOREBOARD</p><h1>Scores</h1></div><div className="score-chip"><Trophy size={17} /><span>Live</span></div></section><section className="scores-intro"><div><h2>Included games</h2><p>{updatedAt ? `Updated ${new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit", second: "2-digit" }).format(updatedAt)} · refreshes every minute` : "Loading ESPN scores…"}</p></div><button className="refresh-button" disabled={loading} onClick={refreshScores} type="button">{loading ? "Refreshing…" : "Refresh"}</button></section>{message && <p className="notice"><CircleAlert size={18} />{message}</p>}{sections.map((section) => <section className="score-section" key={section.league}><h2>{section.league}</h2><div className="score-list">{section.games.map((game) => { const score = scores[game.id]; const isLive = score?.state === "in"; const isFinal = score?.state === "post"; return <article className="score-card" key={game.id}><div className="score-meta"><span>{isLive ? "LIVE" : isFinal ? "FINAL" : game.kickoff}</span><span>{score?.detail ?? "Scheduled"}</span></div><div className="score-team"><strong>{game.away}</strong><b>{score?.awayScore ?? "—"}</b></div><div className="score-team"><strong>{game.home}</strong><b>{score?.homeScore ?? "—"}</b></div></article>; })}</div></section>)}</>;
+  return <><section className="week-header"><div><p className="eyebrow">LIVE SCOREBOARD</p><h1>Scores</h1></div><div className="score-chip"><Trophy size={17} /><span>Live</span></div></section><section className="scores-intro"><div><h2>Included games</h2><p>{updatedAt ? `Updated ${new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit", second: "2-digit" }).format(updatedAt)} · refreshes every minute` : "Loading ESPN scores…"}</p></div><button className="refresh-button" disabled={loading} onClick={refreshScores} type="button">{loading ? "Refreshing…" : "Refresh"}</button></section>{message && <p className="notice"><CircleAlert size={18} />{message}</p>}{sections.map((section) => <section className="score-section" key={section.league}><h2>{section.league}</h2><div className="score-list">{section.games.map((game) => { const score = scores[game.id]; const isLive = score?.state === "in"; const isFinal = score?.state === "post"; const awayCovered = outcomeFromLiveScore(game, "away", score) === "win"; const homeCovered = outcomeFromLiveScore(game, "home", score) === "win"; return <article className="score-card" key={game.id}><div className="score-meta"><span>{isLive ? "LIVE" : isFinal ? "FINAL" : game.kickoff}</span><span>{score?.detail ?? "Scheduled"}</span></div><div className="score-team"><strong>{game.away}{isLive && score?.possession === "away" && <span aria-label={`${game.away} has possession`} className="possession-icon" role="img">🏈</span>}</strong><b className={awayCovered ? "covering-score" : ""}>{score?.awayScore ?? "—"}</b></div><div className="score-team"><strong>{game.home}{isLive && score?.possession === "home" && <span aria-label={`${game.home} has possession`} className="possession-icon" role="img">🏈</span>}</strong><span className="score-spread">{game.homeSpread === "—" ? "No spread" : game.homeSpread}</span><b className={homeCovered ? "covering-score" : ""}>{score?.homeScore ?? "—"}</b></div></article>; })}</div></section>)}</>;
 }
 
-function ResultsPage({ games, cloudWeek, viewerId }) {
+function ResultsPage({ games, cloudWeek, viewerId, isOwner }) {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
+  const [sortBy, setSortBy] = useState("correct");
+  const [sortDirection, setSortDirection] = useState("desc");
   const lockAt = cloudWeek?.lock_at ?? cloudWeek?.lockAt;
   const isLocked = Boolean(lockAt && new Date() >= new Date(lockAt));
   const formattedLock = lockAt ? new Intl.DateTimeFormat("en-US", { weekday: "long", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short" }).format(new Date(lockAt)) : null;
-  async function refreshResults() {
+  async function loadResults(syncAndGrade = false) {
     if (!cloudWeek?.id || (!isLocked && !viewerId)) return;
     setLoading(true); setMessage("");
-    try { setRows(await loadWeekResults(cloudWeek.id, isLocked ? null : viewerId)); }
+    try { const scores = await loadEspnLiveScores(games); if (syncAndGrade && isOwner) await syncFinalScoresAndGrade(cloudWeek.id, games, scores); const nextRows = await loadWeekResults(cloudWeek.id, isLocked ? null : viewerId); setRows(applyLiveOutcomes(nextRows, games, scores)); }
     catch (error) { setMessage(`Could not load results: ${error.message}`); }
     finally { setLoading(false); }
   }
-  useEffect(() => { refreshResults(); }, [cloudWeek?.id, isLocked, viewerId]);
-  const outcomeLabel = (outcome) => ({ win: "W", loss: "L", push: "Push", void: "Void", pending: "Pending" }[outcome] ?? "Pending");
+  async function refreshLiveOutcomes() {
+    try { const scores = await loadEspnLiveScores(games); setRows((current) => applyLiveOutcomes(current, games, scores)); }
+    catch (error) { setMessage(`Could not refresh live results: ${error.message}`); }
+  }
+  useEffect(() => { loadResults(); const timer = window.setInterval(refreshLiveOutcomes, 60_000); return () => window.clearInterval(timer); }, [cloudWeek?.id, isLocked, viewerId, isOwner, games]);
+  const sortedRows = useMemo(() => [...rows].sort((left, right) => {
+    const comparison = sortBy === "player" ? left.displayName.localeCompare(right.displayName) : left.correct - right.correct || left.displayName.localeCompare(right.displayName);
+    return sortDirection === "asc" ? comparison : -comparison;
+  }), [rows, sortBy, sortDirection]);
+  const toggleSort = (field) => { if (sortBy === field) setSortDirection((direction) => direction === "asc" ? "desc" : "asc"); else { setSortBy(field); setSortDirection(field === "player" ? "asc" : "desc"); } };
   if (!cloudWeek) return <><section className="week-header"><div><p className="eyebrow">WEEKLY RESULTS</p><h1>Results</h1></div><div className="score-chip"><Trophy size={17} /><span>Scores</span></div></section><section className="results-placeholder"><h2>No shared slate yet</h2><p>Publish a weekly slate to make its results available after the pick deadline.</p></section></>;
-  return <><section className="week-header"><div><p className="eyebrow">WEEKLY RESULTS</p><h1>{cloudWeek.title}</h1></div><div className="score-chip">{isLocked ? <Trophy size={17} /> : <LockKeyhole size={17} />}<span>{isLocked ? `${rows.length} players` : "Private preview"}</span></div></section><section className="results-intro"><div><h2>{isLocked ? "Everyone’s picks" : "Your submitted picks"}</h2><p>{isLocked ? "Final games will receive a win, loss, push, or void and update the totals here." : `Only you can see this preview. Everyone else's picks remain private until ${formattedLock}.`}</p></div><button className="refresh-button" disabled={loading} onClick={refreshResults} type="button">{loading ? "Refreshing…" : "Refresh"}</button></section>{message && <p className="notice"><CircleAlert size={18} />{message}</p>}{!loading && !rows.length && <section className="results-placeholder"><h2>{isLocked ? "No saved picks" : "No submitted picks yet"}</h2><p>{isLocked ? "No one submitted a pick for this slate before it locked." : "Save your picks from the Picks page to see your private preview here."}</p></section>}<div className="results-scroll"><table className="results-table"><thead><tr><th>Player</th><th className="correct-header">Correct</th>{games.map((game) => <th key={game.id}><span>{game.league}</span><b>{resultHeaderTeam(game, "away")}</b><i>@</i><b>{resultHeaderTeam(game, "home")}</b></th>)}<th>TB</th><th>Pts</th></tr></thead><tbody>{rows.map((row) => <tr key={row.userId}><th>{row.displayName}</th><td className="correct-cell">{row.correct}</td>{games.map((game) => { const pick = row.picks[game.id]; const team = pick ? resultHeaderTeam(game, pick.side) : "—"; return <td className={pick ? `result-cell ${pick.outcome}` : "result-cell"} key={game.id}>{pick ? <><strong>{team}</strong><span className={`result-status ${pick.outcome}`}>{outcomeLabel(pick.outcome)}</span></> : <span className="no-pick">—</span>}</td>; })}<td>{row.tiebreaker ?? "—"}</td><td className="points-cell">{row.points}</td></tr>)}</tbody></table></div><p className="demo-note">Scoring automation is the next step; until then, ungraded selections remain Pending.</p></>;
+  return <><section className="week-header"><div><p className="eyebrow">WEEKLY RESULTS</p><h1>{cloudWeek.title}</h1></div><div className="score-chip">{isLocked ? <Trophy size={17} /> : <LockKeyhole size={17} />}<span>{isLocked ? `${rows.length} players` : "Private preview"}</span></div></section><section className="results-intro"><div><h2>{isLocked ? "Everyone’s picks" : "Your submitted picks"}</h2><p>{isLocked ? "Final games update from ESPN every minute while this page is open." : `Only you can see this preview. Everyone else's picks remain private until ${formattedLock}.`}</p></div><div className="score-actions"><button className="refresh-button" disabled={loading} onClick={refreshLiveOutcomes} type="button">{loading ? "Refreshing…" : "Refresh"}</button>{isOwner && <button className="refresh-button sync-button" disabled={loading} onClick={() => loadResults(true)} type="button">Sync & grade</button>}</div></section>{message && <p className="notice"><CircleAlert size={18} />{message}</p>}{!loading && !rows.length && <section className="results-placeholder"><h2>{isLocked ? "No saved picks" : "No submitted picks yet"}</h2><p>{isLocked ? "No one submitted a pick for this slate before it locked." : "Save your picks from the Picks page to see your private preview here."}</p></section>}<div className="results-scroll"><table className="results-table"><thead><tr><th className="index-header">#</th><th className="player-header"><button aria-label="Sort by player" className="table-sort" onClick={() => toggleSort("player")} type="button">Player {sortBy === "player" ? (sortDirection === "asc" ? "↑" : "↓") : "↕"}</button></th><th className="correct-header"><button aria-label="Sort by correct picks" className="table-sort" onClick={() => toggleSort("correct")} type="button">Correct {sortBy === "correct" ? (sortDirection === "asc" ? "↑" : "↓") : "↕"}</button></th>{games.map((game) => <th key={game.id}><span>{game.league}</span><b>{resultHeaderTeam(game, "away")}</b><i>@</i><b>{resultHeaderTeam(game, "home")}</b></th>)}<th>TB</th><th>Pts</th></tr></thead><tbody>{sortedRows.map((row, index) => <tr key={row.userId}><td className="index-cell">{index + 1}</td><th className="player-cell">{row.displayName}</th><td className="correct-cell">{row.correct}</td>{games.map((game) => { const pick = row.picks[game.id]; const team = pick ? resultHeaderTeam(game, pick.side) : "—"; return <td className={pick ? `result-cell ${pick.outcome}` : "result-cell"} key={game.id}>{pick ? <strong>{team}</strong> : <span className="no-pick">—</span>}</td>; })}<td>{row.tiebreaker ?? "—"}</td><td className="points-cell">{row.points}</td></tr>)}</tbody></table></div><p className="demo-note">Results load once from Supabase. Live refreshes check ESPN only; Sync & grade persists final results.</p></>;
+}
+
+function PointsPage({ season }) {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [message, setMessage] = useState("");
+  const refresh = async () => {
+    setLoading(true); setMessage("");
+    try { setRows(await loadSeasonPoints(season)); }
+    catch (error) { setMessage(`Could not load season points: ${error.message}`); }
+    finally { setLoading(false); }
+  };
+  useEffect(() => { refresh(); }, [season]);
+  const formatPoints = (value) => new Intl.NumberFormat("en-US", { maximumFractionDigits: 2, minimumFractionDigits: Number(value) % 1 ? 2 : 0 }).format(value);
+  return <><section className="week-header"><div><p className="eyebrow">SEASON STANDINGS</p><h1>{season} Points</h1></div><div className="score-chip"><Trophy size={17} /><span>{rows.length} players</span></div></section><section className="results-intro"><div><h2>Running point totals</h2><p>Each player’s weekly entry is deducted when their first pick is saved. Weekly prize awards will be added after their distribution is defined.</p></div><div className="score-actions"><button className="refresh-button" disabled={loading} onClick={refresh} type="button">{loading ? "Refreshing…" : "Refresh"}</button></div></section>{message && <p className="notice"><CircleAlert size={18} />{message}</p>}{!loading && !rows.length ? <section className="results-placeholder"><h2>No players yet</h2><p>Approved players will appear here, including a zero total until they submit an entry.</p></section> : <section className="points-list">{rows.map((row, index) => <div className="points-row" key={row.user_id}><span className="points-index">{index + 1}</span><strong>{row.display_name}</strong><b className={row.total_points < 0 ? "negative-points" : ""}>{formatPoints(row.total_points)}</b></div>)}</section>}<p className="demo-note">Season totals are stored in Supabase and update when this page is refreshed.</p></>;
 }
 
 export default function App() {
@@ -239,5 +302,5 @@ export default function App() {
   if (!authReady) return <main className="app-shell"><p className="demo-note">Checking your account…</p></main>;
   if (isSupabaseConfigured && !session) return <SignInScreen />;
   if (isSupabaseConfigured && approval?.status !== "approved") return <main className="app-shell auth-shell"><section className="auth-card"><p className="eyebrow">ACCESS PENDING</p><h1>Your account is waiting for approval.</h1><p>You’ll be able to make picks after the group administrator approves your request.</p></section></main>;
-  return <main className="app-shell"><header className="topbar"><div className="brand"><span aria-hidden="true" className="helmet-morph"><img className="helmet-wolverine" src={WOLVERINE_HELMET} /><img className="helmet-lions" src={LIONS_HELMET} /></span><span>Saturday Slate</span></div><button className="profile-button" type="button" aria-label="Open account menu">IG <ChevronDown size={15} /></button></header><nav className="page-nav" aria-label="Main navigation"><button className={page === "picks" ? "active" : ""} onClick={() => setPage("picks")} type="button">Picks</button><button className={page === "scores" ? "active" : ""} onClick={() => setPage("scores")} type="button">Scores</button><button className={page === "results" ? "active" : ""} onClick={() => setPage("results")} type="button">Results</button>{(!isSupabaseConfigured || approval?.is_owner) && <button className={page === "admin" ? "active" : ""} onClick={() => setPage("admin")} type="button">Admin</button>}</nav>{page === "admin" ? <AdminPage onPublish={publishGames} ownerId={session?.user?.id} /> : page === "scores" ? <ScoresPage games={games} /> : page === "results" ? <ResultsPage cloudWeek={cloudWeek} games={games} viewerId={session?.user?.id} /> : <PicksPage games={games} picks={picks} setPicks={setPicks} totalPoints={totalPoints} setTotalPoints={setTotalPoints} notice={notice} setNotice={setNotice} cloudWeek={cloudWeek} />}<BuildStamp /></main>;
+  return <main className="app-shell"><header className="topbar"><div className="brand"><span aria-hidden="true" className="helmet-morph"><img className="helmet-wolverine" src={WOLVERINE_HELMET} /><img className="helmet-lions" src={LIONS_HELMET} /></span><span>Saturday Slate</span></div><AccountMenu session={session} /></header><nav className="page-nav" aria-label="Main navigation"><button className={page === "picks" ? "active" : ""} onClick={() => setPage("picks")} type="button">Picks</button><button className={page === "scores" ? "active" : ""} onClick={() => setPage("scores")} type="button">Scores</button><button className={page === "results" ? "active" : ""} onClick={() => setPage("results")} type="button">Results</button><button className={page === "points" ? "active" : ""} onClick={() => setPage("points")} type="button">Points</button>{(!isSupabaseConfigured || approval?.is_owner) && <button className={page === "admin" ? "active" : ""} onClick={() => setPage("admin")} type="button">Admin</button>}</nav>{page === "admin" ? <AdminPage onPublish={publishGames} ownerId={session?.user?.id} /> : page === "scores" ? <ScoresPage games={games} /> : page === "results" ? <ResultsPage cloudWeek={cloudWeek} games={games} isOwner={approval?.is_owner} viewerId={session?.user?.id} /> : page === "points" ? <PointsPage season={cloudWeek?.season ?? demoWeek.season} /> : <PicksPage games={games} picks={picks} setPicks={setPicks} totalPoints={totalPoints} setTotalPoints={setTotalPoints} notice={notice} setNotice={setNotice} cloudWeek={cloudWeek} />}<BuildStamp /></main>;
 }

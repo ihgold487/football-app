@@ -9,7 +9,7 @@ export async function loadPublishedWeek() {
   if (!isSupabaseConfigured) return null;
   const { data: week, error: weekError } = await supabase
     .from("pick_weeks")
-    .select("id, season, week_number, title, lock_at, tiebreaker_game_id")
+    .select("id, season, week_number, title, lock_at, entry_fee, tiebreaker_game_id")
     .not("published_at", "is", null)
     .gte("lock_at", new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString())
     .order("lock_at", { ascending: true })
@@ -26,7 +26,7 @@ export async function loadPublishedWeek() {
     ...week,
     games: (links ?? []).map(({ games }) => ({
       id: games.id, providerGameId: games.provider_game_id, league: games.league === "nfl" ? "NFL" : "NCAA", kickoffAt: games.kickoff_at, kickoff: new Intl.DateTimeFormat("en-US", { weekday: "short", hour: "numeric", minute: "2-digit" }).format(new Date(games.kickoff_at)),
-      away: games.away_team, home: games.home_team, awayShortName: games.away_short_name ?? games.away_team, homeShortName: games.home_short_name ?? games.home_team, awaySpread: games.home_spread === null ? "—" : (games.home_spread > 0 ? `−${games.home_spread}` : `+${Math.abs(games.home_spread)}`),
+      away: games.away_team, home: games.home_team, awayShortName: games.away_short_name ?? games.away_team, homeShortName: games.home_short_name ?? games.home_team, homeSpreadValue: games.home_spread, awaySpread: games.home_spread === null ? "—" : (games.home_spread > 0 ? `−${games.home_spread}` : `+${Math.abs(games.home_spread)}`),
       homeSpread: games.home_spread === null ? "—" : (games.home_spread > 0 ? `+${games.home_spread}` : `−${Math.abs(games.home_spread)}`), status: games.status,
     })).sort((left, right) => (left.league === right.league ? 0 : left.league === "NCAA" ? -1 : 1)),
   };
@@ -40,6 +40,12 @@ export async function savePick(weekId, gameId, side) {
 export async function saveTiebreaker(weekId, totalPoints) {
   const { error } = await supabase.rpc("save_tiebreaker", { target_week_id: weekId, next_total_points: Number(totalPoints) });
   if (error) throw error;
+}
+
+export async function loadSeasonPoints(season) {
+  const { data, error } = await supabase.rpc("get_season_point_totals", { target_season: Number(season) });
+  if (error) throw error;
+  return (data ?? []).map((row) => ({ ...row, total_points: Number(row.total_points) }));
 }
 
 export async function loadUserApprovals() {
@@ -100,9 +106,39 @@ export async function loadWeekResults(weekId, userId = null) {
   return [...rows.values()].sort((left, right) => right.points - left.points || left.displayName.localeCompare(right.displayName));
 }
 
-export async function publishWeek({ season, weekNumber, title, lockAt, lockRule, games, tiebreakerGameId }) {
+export async function syncFinalScoresAndGrade(weekId, games, scoresByGame) {
+  const finalGames = games.filter((game) => scoresByGame[game.id]?.completed && Number.isFinite(Number(scoresByGame[game.id].awayScore)) && Number.isFinite(Number(scoresByGame[game.id].homeScore)));
+  if (!finalGames.length) return 0;
+  const scoreUpdates = await Promise.all(finalGames.map((game) => {
+    const score = scoresByGame[game.id];
+    return supabase.from("games").update({ away_score: Number(score.awayScore), home_score: Number(score.homeScore), status: "final", updated_at: new Date().toISOString() }).eq("id", game.id);
+  }));
+  const scoreError = scoreUpdates.find(({ error }) => error)?.error;
+  if (scoreError) throw scoreError;
+  const gameIds = finalGames.map((game) => game.id);
+  const { data: picks, error: pickError } = await supabase.from("picks").select("id, game_id, selected_side").eq("week_id", weekId).in("game_id", gameIds);
+  if (pickError) throw pickError;
+  const gamesById = new Map(finalGames.map((game) => [game.id, game]));
+  const results = (picks ?? []).map((pick) => {
+    const game = gamesById.get(pick.game_id);
+    const score = scoresByGame[pick.game_id];
+    const spread = Number(game.homeSpreadValue);
+    let outcome = "void";
+    if (Number.isFinite(spread)) {
+      const adjustedHomeMargin = Number(score.homeScore) - Number(score.awayScore) + spread;
+      outcome = adjustedHomeMargin === 0 ? "push" : (pick.selected_side === (adjustedHomeMargin > 0 ? "home" : "away") ? "win" : "loss");
+    }
+    return { pick_id: pick.id, outcome, points_awarded: outcome === "win" ? 1 : 0, graded_at: new Date().toISOString() };
+  });
+  if (!results.length) return 0;
+  const { error: resultError } = await supabase.from("pick_results").upsert(results, { onConflict: "pick_id" });
+  if (resultError) throw resultError;
+  return results.length;
+}
+
+export async function publishWeek({ season, weekNumber, title, lockAt, lockRule, entryFee, games, tiebreakerGameId }) {
   const { data: week, error: weekError } = await supabase.from("pick_weeks").upsert({
-    season, week_number: weekNumber, title, lock_at: lockAt, lock_rule: lockRule, tiebreaker_game_id: null, published_at: new Date().toISOString(),
+    season, week_number: weekNumber, title, lock_at: lockAt, lock_rule: lockRule, entry_fee: Number(entryFee), tiebreaker_game_id: null, published_at: new Date().toISOString(),
   }, { onConflict: "season,week_number" }).select("id").single();
   if (weekError) throw weekError;
   const gameRows = games.map((game) => ({ provider: "espn", provider_game_id: game.id, league: game.league === "NFL" ? "nfl" : "ncaa_fbs", season, week_number: weekNumber, kickoff_at: game.kickoffAt ?? new Date().toISOString(), away_team: game.away, home_team: game.home, away_short_name: game.awayShortName ?? game.away, home_short_name: game.homeShortName ?? game.home, home_spread: toNumber(game.homeSpread), status: "scheduled" }));
@@ -122,6 +158,7 @@ export async function publishWeek({ season, weekNumber, title, lockAt, lockRule,
     week_number: weekNumber,
     title,
     lock_at: lockAt,
+    entry_fee: Number(entryFee),
     tiebreaker_game_id: tiebreakerId,
     // The browser uses database UUIDs for save_pick(), while the importer
     // uses ESPN IDs. Return the UUID-mapped game list immediately after

@@ -98,11 +98,14 @@ export async function loadEspnLiveScores(games) {
     const competition = event?.competitions?.[0];
     const home = competition?.competitors?.find((team) => team.homeAway === "home");
     const away = competition?.competitors?.find((team) => team.homeAway === "away");
+    const possessionTeamId = competition?.situation?.possession;
     return [game.id, event ? {
       state: event.status?.type?.state ?? "pre",
+      completed: Boolean(event.status?.type?.completed),
       detail: event.status?.type?.shortDetail ?? "Scheduled",
       homeScore: home?.score ?? "—",
       awayScore: away?.score ?? "—",
+      possession: String(possessionTeamId) === String(home?.team?.id) ? "home" : String(possessionTeamId) === String(away?.team?.id) ? "away" : null,
     } : null];
   }));
 }
